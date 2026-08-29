@@ -61,6 +61,13 @@ appends the separator and the per-section *Hide … HUD* entry itself.
 
 ## Behaviour
 
+- **Tab-aware.** Each section declares the Flame tabs it belongs to
+  (`tabs=("Batch",)` by default; falsy = all). The dock hides itself when
+  the current tab matches no enabled section and reappears on return —
+  a Batch HUD has no business floating over the Timeline. Flame has no
+  tab-change hook, so the trigger is `QApplication.focusChanged` (a plain
+  signal connection) with a cached `flame.get_current_tab()` compare;
+  action checkpoints re-apply the context as a fallback.
 - **Drag** anywhere to move the dock; the OS-native `startSystemMove()`
   does the work (reliable for frameless windows on every platform), with
   a manual-move fallback. Position persists per user.
