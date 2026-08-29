@@ -18,10 +18,20 @@
 #       refresh=my_refresh,         # () -> {"html": ..., "tooltip": ...,
 #                                   #        "alert": bool, "dot": "#hex"}
 #       menu=my_menu,               # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
-#       default_enabled=False)      # first-run state (per-user file wins later)
+#       default_enabled=False,      # first-run state (per-user file wins later)
+#       tabs=("Batch",))            # Flame tabs where this section belongs
 #   forge_hud.toggle("wireless")    # menu action; returns the new state
 #   forge_hud.ensure()              # show the dock if any section is enabled
 #   forge_hud.update()              # refresh row labels (action checkpoints)
+#
+# Tab awareness: the dock hides itself when the current Flame tab matches no
+# enabled section's `tabs` (a Batch HUD has no business floating over the
+# Timeline) and reappears on return. Flame has no tab-change hook, so the
+# trigger is QApplication.focusChanged -- a plain signal connection (not an
+# event filter), fired whenever the user clicks into another tab; the
+# handler compares flame.get_current_tab() against a cached value and does
+# nothing when unchanged. Action checkpoints (update/ensure) re-apply the
+# context too, covering any transition focus misses.
 #
 # Row anatomy is owned by the LIBRARY so every section reads the same way:
 #
@@ -60,7 +70,7 @@
 import json
 import os
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -83,27 +93,23 @@ def _qt():
 
 # --- process-global anchor (survives reloads) ------------------------------
 
-_LOCAL = {"sections": {}, "order": [], "dock": None}
-
-
 def _anchor():
-    """The one registry+dock holder for this process.
+    """The one registry+dock holder for this process, parked on `builtins`.
 
-    Parked on the QApplication instance so a reload of this module finds
-    the same dict; module-global fallback keeps headless imports working.
+    NOT on the QApplication instance: PySide can garbage-collect the
+    Python *wrapper* around the C++ QApplication and mint a fresh one,
+    taking any dynamic attributes (and with them the registry and the dock
+    reference) silently with it -- seen live on 2026.2.2 as a dock that
+    would not come back and a registry that had emptied itself. A builtins
+    attribute is plain Python: immune to wrapper GC, to importlib.reload,
+    and to a rescan that builds a new module object.
     """
-    try:
-        _c, _g, QtWidgets = _qt()
-        app = QtWidgets.QApplication.instance()
-        if app is None:
-            return _LOCAL
-        held = getattr(app, "_forge_hud_state", None)
-        if held is None:
-            app._forge_hud_state = _LOCAL
-            return _LOCAL
-        return held
-    except Exception:
-        return _LOCAL
+    import builtins               # noqa: PLC0415
+    held = getattr(builtins, "_forge_hud_state", None)
+    if held is None:
+        held = {"sections": {}, "order": [], "dock": None}
+        builtins._forge_hud_state = held
+    return held
 
 
 # --- per-user state file ----------------------------------------------------
@@ -135,9 +141,11 @@ def _set_enabled(sid, value):
 
 # --- public API -------------------------------------------------------------
 
-def register(sid, title, refresh, menu, default_enabled=False):
+def register(sid, title, refresh, menu, default_enabled=False,
+             tabs=("Batch",)):
     """Add or replace a HUD section. Safe to call at import time (no Qt is
-    touched); safe to call again on module reload (replaces by id)."""
+    touched); safe to call again on module reload (replaces by id).
+    `tabs` names the Flame tabs the section belongs to (falsy = all)."""
     st = _anchor()
     if sid not in st["order"]:
         st["order"].append(sid)
@@ -146,6 +154,7 @@ def register(sid, title, refresh, menu, default_enabled=False):
         "refresh": refresh,
         "menu": menu,
         "default": bool(default_enabled),
+        "tabs": tuple(tabs) if tabs else (),
     }
     dock = st.get("dock")
     if dock is not None:
@@ -189,7 +198,7 @@ def toggle(sid):
 
 
 def ensure():
-    """Show the dock if any registered section is enabled."""
+    """Surface the dock if any enabled section belongs on the current tab."""
     st = _anchor()
     if not any(enabled(s) for s in st["order"] if s in st["sections"]):
         return
@@ -202,23 +211,89 @@ def ensure():
         st["dock"] = dock
         state = _state()
         dock.move(int(state.get("x", 80)), int(state.get("y", 80)))
+        _connect_focus()
     try:
         dock.rebuild()
-        if not dock.isVisible():
-            dock.show()
-        dock.refresh_labels()
     except Exception:
         pass
+    _apply_context(force=True)
 
 
 def update():
     """Refresh row labels; cheap no-op when the dock is hidden or absent."""
+    _apply_context()              # cached tab compare -- cheap when unchanged
     dock = _anchor().get("dock")
     if dock is None:
         return
     try:
         if dock.isVisible():
             dock.refresh_labels()
+    except Exception:
+        pass
+
+
+# --- tab context ------------------------------------------------------------
+# The dock belongs to specific Flame tabs (each section declares its own;
+# Batch by default). No hook announces a tab change, so focusChanged is the
+# trigger: it fires when the user clicks into another tab, the handler
+# no-ops while the tab is unchanged, and the action checkpoints re-apply
+# the context as a fallback for transitions focus misses.
+
+def _current_tab():
+    """The current Flame tab name, or None outside Flame (fail open)."""
+    try:
+        import flame              # noqa: PLC0415
+        return str(flame.get_current_tab())
+    except Exception:
+        return None
+
+
+def _apply_context(force=False):
+    """Show/hide the dock for the current tab; filter rows to it."""
+    st = _anchor()
+    dock = st.get("dock")
+    if dock is None:
+        return
+    try:
+        tab = _current_tab()
+        if not force and tab == dock._last_tab:
+            return
+        dock._last_tab = tab
+        dock._apply_collapse()    # re-filter rows for the new tab
+        here = any(dock._row_on_tab(sid, tab) for sid in dock._titles)
+        if here:
+            if not dock.isVisible():
+                dock.show()
+            dock.refresh_labels()
+        else:
+            dock.hide()
+    except Exception:
+        pass                      # a HUD must never break an action
+
+
+def _on_focus_changed(_old, _new):
+    _apply_context()
+
+
+def _connect_focus():
+    """Watch focus changes; reload-safe (the previous module generation's
+    handler is disconnected via the callable held in the anchored state --
+    the Qt connection itself lives on the C++ side and would otherwise
+    pile up one handler per reload)."""
+    try:
+        _c, _g, QtWidgets = _qt()
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        st = _anchor()
+        old = st.get("focus_cb")
+        if old is not None:
+            try:
+                app.focusChanged.disconnect(old)
+            except Exception:
+                pass
+        app.focusChanged.connect(_on_focus_changed)
+        st["focus_cb"] = _on_focus_changed
     except Exception:
         pass
 
@@ -243,6 +318,7 @@ def _make_dock():
             self._offset = None
             self._moved = False
             self._manual_drag = False
+            self._last_tab = "\x00uninitialised"
             self._rows = {}                       # QLabel -> section id
             self._titles = {}                     # section id -> header QLabel
             self._contents = {}                   # section id -> content QLabel
@@ -304,10 +380,16 @@ def _make_dock():
                 r += 1
             self._apply_collapse()
 
+        def _row_on_tab(self, sid, tab):
+            sec = st["sections"].get(sid) or {}
+            wants = sec.get("tabs")
+            return tab is None or not wants or tab in wants
+
         def _apply_collapse(self):
             collapsed = bool(_state().get("collapsed"))
-            for lbl in self._rows:
-                lbl.setVisible(not collapsed)
+            tab = _current_tab()
+            for lbl, sid in self._rows.items():
+                lbl.setVisible(not collapsed and self._row_on_tab(sid, tab))
             self.refresh_labels()
 
         # -- content --------------------------------------------------------
@@ -456,23 +538,31 @@ def _make_dock():
 
 def _adopt_previous():
     st = _anchor()
-    if st is _LOCAL:
-        return                    # first load in this process (or headless)
-    old = st.get("dock")
-    if old is None:
-        return
     try:
-        was_visible = old.isVisible()
-        old.close()
-        old.deleteLater()
+        _c, _g, QtWidgets = _qt()
+        app = QtWidgets.QApplication.instance()
+        old_cb = st.get("focus_cb")
+        if app is not None and old_cb is not None:
+            app.focusChanged.disconnect(old_cb)
+            st["focus_cb"] = None
     except Exception:
-        was_visible = False
-    st["dock"] = None
-    if was_visible:
+        pass
+    old = st.get("dock")
+    if old is not None:
         try:
-            ensure()
+            old.close()
+            old.deleteLater()
         except Exception:
             pass
+        st["dock"] = None
+    # rebuild unconditionally: the dock may have been hidden only by tab
+    # context (not by the user), and ensure() + _apply_context() restore
+    # the correct state either way -- created, watching focus, shown or
+    # hidden for the current tab
+    try:
+        ensure()
+    except Exception:
+        pass
 
 
 _adopt_previous()
