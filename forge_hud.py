@@ -14,11 +14,22 @@
 #   import forge_hud
 #   forge_hud.register(
 #       "wireless",                 # stable id
-#       title="Wireless",           # used in "Hide Wireless HUD"
+#       title="Wireless",           # the row's header + "Hide Wireless HUD"
 #       refresh=my_refresh,         # () -> {"html": ..., "tooltip": ...,
 #                                   #        "alert": bool, "dot": "#hex"}
 #       menu=my_menu,               # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
 #       default_enabled=False)      # first-run state (per-user file wins later)
+#
+# Row anatomy is owned by the LIBRARY so every section reads the same way:
+#
+#     ● WIRELESS   12 ch · 31 gets
+#     ● TAKE       comp_v2  GMM_260
+#
+# dot (refresh's "dot", crimson on "alert") + the section title as a small
+# muted header in its own aligned column + the section's content ("html",
+# content only -- no dot, no tool name). Without the header column, a row
+# whose content is a value (a take name) is unreadable next to one whose
+# content is a summary.
 #   forge_hud.toggle("wireless")    # menu action; returns the new state
 #   forge_hud.ensure()              # show the dock if any section is enabled
 #   forge_hud.update()              # refresh row labels (action checkpoints)
@@ -49,7 +60,7 @@
 import json
 import os
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -233,6 +244,8 @@ def _make_dock():
             self._moved = False
             self._manual_drag = False
             self._rows = {}                       # QLabel -> section id
+            self._titles = {}                     # section id -> header QLabel
+            self._contents = {}                   # section id -> content QLabel
             lay = QtWidgets.QVBoxLayout(self)
             lay.setContentsMargins(14, 7, 14, 9)
             lay.setSpacing(4)
@@ -245,26 +258,44 @@ def _make_dock():
                 "color: #ddd; font-size: 11px; font-weight: bold; "
                 "background: transparent;")
             lay.addWidget(self.header)
+            # two aligned columns: "● TITLE" headers left, content right
+            self._grid = QtWidgets.QGridLayout()
+            self._grid.setHorizontalSpacing(10)
+            self._grid.setVerticalSpacing(4)
+            lay.addLayout(self._grid)
 
         # -- structure ------------------------------------------------------
 
         def rebuild(self):
             """Recreate one row per enabled section, in registration order."""
-            lay = self.layout()
-            for lbl in list(self._rows):
-                lay.removeWidget(lbl)
-                lbl.deleteLater()
+            while self._grid.count():
+                item = self._grid.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
             self._rows = {}
+            self._titles = {}
+            self._contents = {}
+            r = 0
             for sid in st["order"]:
                 if sid not in st["sections"] or not enabled(sid):
                     continue
-                lbl = QtWidgets.QLabel("", self)
-                lbl.setTextFormat(QtCore.Qt.RichText)
-                lbl.setStyleSheet(
+                title = QtWidgets.QLabel("", self)
+                title.setTextFormat(QtCore.Qt.RichText)
+                title.setStyleSheet("background: transparent;")
+                content = QtWidgets.QLabel("", self)
+                content.setTextFormat(QtCore.Qt.RichText)
+                content.setStyleSheet(
                     "color: #ddd; font-size: 13px; font-weight: bold; "
                     "background: transparent;")
-                lay.addWidget(lbl)
-                self._rows[lbl] = sid
+                self._grid.addWidget(title, r, 0)
+                self._grid.addWidget(content, r, 1)
+                # a click on either half of the row opens the section menu
+                self._rows[title] = sid
+                self._rows[content] = sid
+                self._titles[sid] = title
+                self._contents[sid] = content
+                r += 1
             self._apply_collapse()
 
         def _apply_collapse(self):
@@ -278,19 +309,28 @@ def _make_dock():
         def refresh_labels(self):
             collapsed = bool(_state().get("collapsed"))
             dots = []
-            for lbl, sid in self._rows.items():
+            for sid in st["order"]:
+                if sid not in self._titles:
+                    continue
                 sec = st["sections"].get(sid)
                 if sec is None:
                     continue
                 try:
                     d = sec["refresh"]() or {}
                 except Exception:
-                    d = {"html": '<span style="color: #666;">'
-                                 + sid + " (error)</span>"}
-                lbl.setText(d.get("html", sid))
-                lbl.setToolTip(d.get("tooltip", ""))
-                dots.append(d.get("dot")
-                            or ("#C0392B" if d.get("alert") else "#777"))
+                    d = {"html": '<span style="color: #666;">(error)</span>'}
+                dot = (d.get("dot")
+                       or ("#C0392B" if d.get("alert") else "#777"))
+                self._titles[sid].setText(
+                    '<span style="color: {0}; font-size: 13px;">●</span>'
+                    '&nbsp;<span style="color: #8a93a4; font-size: 10px; '
+                    'font-weight: bold;">{1}</span>'.format(
+                        dot, sec["title"].upper()))
+                self._contents[sid].setText(d.get("html", ""))
+                tip = d.get("tooltip", "")
+                self._titles[sid].setToolTip(tip)
+                self._contents[sid].setToolTip(tip)
+                dots.append(dot)
             arrow = "▸" if collapsed else "▾"
             chip = ('<span style="color: {0};">FORGE</span>'
                     '&nbsp;<span style="color: #666;">{1}</span>'

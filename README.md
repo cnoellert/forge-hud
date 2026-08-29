@@ -7,8 +7,12 @@ every enabled section renders as one row in a single frameless,
 always-on-top, draggable dock:
 
     FORGE ▾
-    ● wireless   14 ch · 31 gets
-    ● comp_v2    GMM_260
+    ● WIRELESS   14 ch · 31 gets
+    ● TAKE       comp_v2  GMM_260
+
+The row anatomy is owned by the library so every section reads the same
+way: status dot, then the section title as a small muted header in its own
+aligned column, then the section's content. Tools supply only the content.
 
 Clicking a row opens that section's own popup menu — the channel palette
 for wireless, the take switcher for takes — built fresh by the owning tool
@@ -47,11 +51,13 @@ forge_hud.update()             # refresh row labels (action checkpoints)
 ```
 
 `register()` is safe at import time (no Qt is touched) and replaces by id,
-so module reloads re-register cleanly. `refresh()` returns the row's rich
-text (`html`), an optional `tooltip`, an `alert` flag, and an optional
-`dot` colour used for the collapsed chip. `menu()` receives an empty
-styled `QMenu` and the Qt modules, and populates it; the library appends
-the separator and the per-section *Hide … HUD* entry itself.
+so module reloads re-register cleanly. `refresh()` returns the row's
+**content** as rich text (`html` — no dot, no tool name: the library
+renders the dot and the `title` header itself), an optional `tooltip`, an
+`alert` flag, and an optional `dot` colour used for the row dot and the
+collapsed chip (`alert` alone turns it crimson). `menu()` receives an
+empty styled `QMenu` and the Qt modules, and populates it; the library
+appends the separator and the per-section *Hide … HUD* entry itself.
 
 ## Behaviour
 
