@@ -19,6 +19,9 @@
 #                                   #        "alert": bool, "dot": "#hex"}
 #       menu=my_menu,               # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
 #       default_enabled=False)      # first-run state (per-user file wins later)
+#   forge_hud.toggle("wireless")    # menu action; returns the new state
+#   forge_hud.ensure()              # show the dock if any section is enabled
+#   forge_hud.update()              # refresh row labels (action checkpoints)
 #
 # Row anatomy is owned by the LIBRARY so every section reads the same way:
 #
@@ -30,9 +33,6 @@
 # content only -- no dot, no tool name). Without the header column, a row
 # whose content is a value (a take name) is unreadable next to one whose
 # content is a summary.
-#   forge_hud.toggle("wireless")    # menu action; returns the new state
-#   forge_hud.ensure()              # show the dock if any section is enabled
-#   forge_hud.update()              # refresh row labels (action checkpoints)
 #
 # register() replaces by id, so module reloads re-register cleanly. refresh()
 # and menu() must never raise for the caller's sake -- but the dock guards
