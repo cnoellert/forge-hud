@@ -24,9 +24,18 @@ collapsed dock still shows health at a glance.
 ## Install
 
 Drop `forge_hud.py` into the same Flame python hooks path as the FORGE
-tools that use it, e.g. `/opt/Autodesk/shared/python/`. Distros import it
-guarded: where it is missing, their HUD is simply unavailable and
-everything else works.
+tools that use it, e.g. `/opt/Autodesk/shared/python/`, then rescan
+python hooks in Flame (`Ctrl+Shift+P+H`, or restart). One file, no other
+dependencies. Distros import it guarded: where it is missing, their HUD
+is simply unavailable and everything else works. The forge-takes
+installer can deploy it for you (`python3 scripts/install_hook.py
+--with-hud`), and never downgrades an existing copy — keep that rule if
+you script your own deployment, since several FORGE tools share the one
+file.
+
+Consumers pin the **major** version: this file must bump to 2.x if the
+`register/toggle/show/hide/enabled/ensure/update` contract ever breaks,
+and consumers treat an incompatible major exactly like absence.
 
 ## API
 
