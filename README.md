@@ -64,25 +64,35 @@ appends the separator and the per-section *Hide … HUD* entry itself.
 - **Tab-aware.** Each section declares the Flame tabs it belongs to
   (`tabs=("Batch",)` by default; falsy = all). The dock hides itself when
   the current tab matches no enabled section and reappears on return —
-  a Batch HUD has no business floating over the Timeline. Flame has no
-  tab-change hook, so the trigger is `QApplication.focusChanged` (a plain
-  signal connection) with a cached `flame.get_current_tab()` compare;
-  action checkpoints re-apply the context as a fallback.
+  a Batch HUD has no business floating over the Timeline. Flame emits
+  **no event** on a tab switch — no hook exists, and the custom-drawn tab
+  bar produces zero Qt focus traffic (verified live with counters on
+  `focusChanged`/`focusObjectChanged`/`focusWindowChanged`) — so the
+  watcher is a 600 ms heartbeat polling `flame.get_current_tab()` (a
+  trivial getter). This is the **one sanctioned `QTimer`** in the FORGE
+  HUD family: the crash-catalog hazard is timers firing into closing
+  dialogs, and this one is parented to the session-lived dock, does a
+  guarded getter-and-compare per tick, stops itself when orphaned, and is
+  stopped before a reload swaps the dock. If it ever dies, the action
+  checkpoints still re-apply the context — lazy hiding, never breakage.
 - **Drag** anywhere to move the dock; the OS-native `startSystemMove()`
   does the work (reliable for frameless windows on every platform), with
   a manual-move fallback. Position persists per user.
-- **Refresh model — no `QTimer`, ever** (the crash-#16 rules from
+- **Refresh model.** Otherwise timer-free (the crash-#16 rules from
   forge-takes apply throughout: standard widgets only, no custom
   delegates, no event filters). Row labels refresh on mouse-enter, after
   every popup, and whenever a tool calls `update()` from its action
   checkpoints. Flame has no hook for node deletion or graph edits, so
   hover-refresh is the event-driven answer to state that changes behind
   the tools' backs.
-- **Reload safety.** The registry, dock window and state are parked on the
-  `QApplication` instance, which survives module reloads. A hook rescan
-  that reloads `forge_hud` adopts the parked state, closes the old window
-  (its methods belong to the old module object) and rebuilds with the new
-  code — no zombie pill, no lost registrations.
+- **Reload safety.** The registry, dock reference and heartbeat handle are
+  anchored on `builtins` — deliberately **not** on the `QApplication`
+  instance: PySide can garbage-collect the Python wrapper around the C++
+  app and mint a fresh one, silently dropping dynamic attributes (and the
+  registry with them — seen live). A hook rescan that reloads `forge_hud`
+  adopts the anchored state, stops the old heartbeat, closes the old
+  window (its methods belong to the old module object) and rebuilds with
+  the new code — no zombie pill, no lost registrations.
 - **State** — position, collapsed, per-section enabled — persists in
   `~/.forge_hud.json`.
 
