@@ -26,12 +26,17 @@
 #
 # Tab awareness: the dock hides itself when the current Flame tab matches no
 # enabled section's `tabs` (a Batch HUD has no business floating over the
-# Timeline) and reappears on return. Flame has no tab-change hook, so the
-# trigger is QApplication.focusChanged -- a plain signal connection (not an
-# event filter), fired whenever the user clicks into another tab; the
-# handler compares flame.get_current_tab() against a cached value and does
-# nothing when unchanged. Action checkpoints (update/ensure) re-apply the
-# context too, covering any transition focus misses.
+# Timeline) and reappears on return. Flame has no tab-change hook, and --
+# verified live on 2026.2.2 with counters on focusChanged /
+# focusObjectChanged / focusWindowChanged -- its custom-drawn tab bar emits
+# NO Qt focus traffic when the user switches tabs. The only mechanism left
+# is a slow heartbeat: a 600 ms QTimer on the dock reading
+# flame.get_current_tab() (a trivial getter) and re-applying the context on
+# change. This is the ONE sanctioned QTimer in the FORGE HUD family -- the
+# crash-#16 hazard is timers firing into closing dialogs, and this one is
+# parented to a session-lived singleton, does nothing but a guarded getter
+# + compare, stops itself if the anchor no longer points at its dock, and
+# is stopped explicitly before a reload swaps the dock.
 #
 # Row anatomy is owned by the LIBRARY so every section reads the same way:
 #
@@ -70,7 +75,7 @@
 import json
 import os
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -211,7 +216,7 @@ def ensure():
         st["dock"] = dock
         state = _state()
         dock.move(int(state.get("x", 80)), int(state.get("y", 80)))
-        _connect_focus()
+        _start_heartbeat(dock)
     try:
         dock.rebuild()
     except Exception:
@@ -234,10 +239,10 @@ def update():
 
 # --- tab context ------------------------------------------------------------
 # The dock belongs to specific Flame tabs (each section declares its own;
-# Batch by default). No hook announces a tab change, so focusChanged is the
-# trigger: it fires when the user clicks into another tab, the handler
-# no-ops while the tab is unchanged, and the action checkpoints re-apply
-# the context as a fallback for transitions focus misses.
+# Batch by default). No hook announces a tab change and the custom-drawn
+# tab bar emits no Qt focus signals (verified live), so the dock's
+# heartbeat timer is the trigger; the action checkpoints re-apply the
+# context too, so a stopped timer degrades to lazy hiding, never breakage.
 
 def _current_tab():
     """The current Flame tab name, or None outside Flame (fail open)."""
@@ -271,29 +276,28 @@ def _apply_context(force=False):
         pass                      # a HUD must never break an action
 
 
-def _on_focus_changed(_old, _new):
-    _apply_context()
-
-
-def _connect_focus():
-    """Watch focus changes; reload-safe (the previous module generation's
-    handler is disconnected via the callable held in the anchored state --
-    the Qt connection itself lives on the C++ side and would otherwise
-    pile up one handler per reload)."""
+def _start_heartbeat(dock):
+    """The dock's 600 ms tab watcher -- see the module header for why this
+    is the one sanctioned QTimer. Parented to the dock (dies with it),
+    stops itself if the anchor no longer points at its dock."""
     try:
-        _c, _g, QtWidgets = _qt()
-        app = QtWidgets.QApplication.instance()
-        if app is None:
-            return
-        st = _anchor()
-        old = st.get("focus_cb")
-        if old is not None:
+        QtCore, _g, _w = _qt()
+        timer = QtCore.QTimer(dock)
+        timer.setInterval(600)
+
+        def tick():
             try:
-                app.focusChanged.disconnect(old)
+                if _anchor().get("dock") is not dock:
+                    timer.stop()
+                    return
+                if _current_tab() != dock._last_tab:
+                    _apply_context(force=True)
             except Exception:
-                pass
-        app.focusChanged.connect(_on_focus_changed)
-        st["focus_cb"] = _on_focus_changed
+                pass              # a HUD must never break anything
+
+        timer.timeout.connect(tick)
+        timer.start()
+        dock._tab_timer = timer
     except Exception:
         pass
 
@@ -538,6 +542,8 @@ def _make_dock():
 
 def _adopt_previous():
     st = _anchor()
+    # disconnect a previous generation's focusChanged handler (v1.2.x used
+    # one before the heartbeat replaced it) and stop its timer
     try:
         _c, _g, QtWidgets = _qt()
         app = QtWidgets.QApplication.instance()
@@ -545,6 +551,10 @@ def _adopt_previous():
         if app is not None and old_cb is not None:
             app.focusChanged.disconnect(old_cb)
             st["focus_cb"] = None
+    except Exception:
+        pass
+    try:
+        st["dock"]._tab_timer.stop()
     except Exception:
         pass
     old = st.get("dock")
