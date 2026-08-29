@@ -60,7 +60,7 @@
 import json
 import os
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -272,6 +272,12 @@ def _make_dock():
                 item = self._grid.takeAt(0)
                 w = item.widget()
                 if w is not None:
+                    # hide + unparent IMMEDIATELY: deleteLater alone is
+                    # deferred, and a rebuild triggered from a popup or a
+                    # hook left old labels alive and painting over the new
+                    # row (seen live: a 'ghost' takes row on 2026.2.2)
+                    w.hide()
+                    w.setParent(None)
                     w.deleteLater()
             self._rows = {}
             self._titles = {}
