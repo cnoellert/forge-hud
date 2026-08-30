@@ -53,8 +53,9 @@
 # and menu() must never raise for the caller's sake -- but the dock guards
 # every callback anyway: a HUD must never break an action.
 #
-# Staleness model (no QTimer -- the crash-#16 rules from forge-takes apply
-# throughout: standard widgets only, no custom delegates, no event filters):
+# Staleness model (timer-free apart from the heartbeat above -- the
+# crash-#16 rules from forge-takes apply throughout: standard widgets only,
+# no custom delegates, no event filters):
 #   * popups rebuild live on click -- never stale
 #   * row labels refresh on mouse-enter, after every popup, and whenever the
 #     owning tool calls update() from its action checkpoints
@@ -62,11 +63,15 @@
 # the API inventory), so hover-refresh is the event-driven answer to state
 # that changes behind the tools' backs.
 #
-# Reload safety: everything long-lived (registry, dock window, state) is
-# parked on the QApplication instance, which survives module reloads. A
-# rescan that reloads THIS module adopts the parked state, closes the old
-# window (its methods belong to the old module object), and rebuilds with
-# the new code -- no zombie pill, no lost registrations.
+# Reload safety: everything long-lived (registry, dock reference, heartbeat
+# handle) is anchored on `builtins` -- deliberately NOT the QApplication
+# wrapper, which PySide can garbage-collect (taking dynamic attributes with
+# it; seen live). A rescan that reloads THIS module adopts the anchored
+# state, stops the old heartbeat, closes the old window (its methods belong
+# to the old module object) and rebuilds with the new code -- no zombie
+# pill, no lost registrations. Cold start is covered separately: an idle
+# event scheduled at import raises the dock after a Flame restart (see the
+# cold-start boot at the bottom).
 #
 # Per-user state -- position, collapsed, per-section enabled -- persists in
 # ~/.forge_hud.json.
@@ -75,7 +80,7 @@
 import json
 import os
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -575,4 +580,29 @@ def _adopt_previous():
         pass
 
 
+# --- cold-start boot --------------------------------------------------------
+# Hook-scan imports run during Flame startup, before any checkpoint -- and
+# entering an existing desktop batch after a restart fires NO hook at all
+# (batch_setup_loaded is disk loads only), so without this the dock waited
+# for the first right-click or takes action. One idle event on the main
+# thread: ensure() builds the dock (hidden or shown per the current tab)
+# and starts the heartbeat, which handles everything from then on.
+# Idempotent; a no-op when nothing is enabled or outside Flame.
+
+def _startup_boot():
+    try:
+        ensure()
+    except Exception:
+        pass
+
+
+def _schedule_startup_boot():
+    try:
+        import flame              # noqa: PLC0415
+        flame.schedule_idle_event(_startup_boot)
+    except Exception:
+        pass                      # headless / outside Flame
+
+
 _adopt_previous()
+_schedule_startup_boot()
