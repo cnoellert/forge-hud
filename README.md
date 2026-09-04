@@ -57,6 +57,7 @@ forge_hud.hide("wireless")     # disable (dock hides when no sections left)
 forge_hud.enabled("wireless")  # -> bool
 forge_hud.ensure()             # show the dock if any section is enabled
 forge_hud.update()             # refresh row labels (action checkpoints)
+forge_hud.reset_position()     # park the rail back at the default corner
 ```
 
 `register()` is safe at import time (no Qt is touched) and replaces by id,
@@ -66,7 +67,8 @@ renders the dot and the `title` header itself), an optional `tooltip`, an
 `alert` flag, and an optional `dot` colour used for the row dot and the
 collapsed chip (`alert` alone turns it crimson). `menu()` receives an
 empty styled `QMenu` and the Qt modules, and populates it; the library
-appends the separator and the per-section *Hide … HUD* entry itself.
+appends the separator, *Reset HUD position* and the per-section
+*Hide … HUD* entry itself.
 
 ## Behaviour
 
@@ -87,6 +89,17 @@ appends the separator and the per-section *Hide … HUD* entry itself.
 - **Drag** anywhere to move the dock; the OS-native `startSystemMove()`
   does the work (reliable for frameless windows on every platform), with
   a manual-move fallback. Position persists per user.
+- **Screen-aware placement.** The saved position is absolute desktop
+  coordinates, so a display that shrinks under the dock — a working- or
+  UI-resolution change, a monitor unplugged, Flame moved to a smaller
+  screen — used to strand a frameless, title-bar-less window outside
+  every screen: invisible, undraggable, recoverable only by editing the
+  state file. Every placement now clamps the window fully inside the
+  available geometry of whichever screen it most overlaps (nearest one if
+  it overlaps none), on restore, on every show, and from the heartbeat
+  whenever the set of screen rectangles changes — so the dock walks back
+  into view on its own. *Reset HUD position* in any section's popup (and
+  `reset_position()`) is the manual way home.
 - **Refresh model.** Otherwise timer-free (the crash-#16 rules from
   forge-takes apply throughout: standard widgets only, no custom
   delegates, no event filters). Row labels refresh on mouse-enter, after

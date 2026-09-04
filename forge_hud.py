@@ -75,12 +75,23 @@
 #
 # Per-user state -- position, collapsed, per-section enabled -- persists in
 # ~/.forge_hud.json.
+#
+# Screen-aware placement: the saved position is absolute desktop
+# coordinates, so a display that shrinks under it (working-resolution
+# change, a monitor unplugged, Flame moved to a smaller screen) can leave a
+# frameless, title-bar-less dock parked outside every screen -- invisible
+# and undraggable, recoverable only by editing the state file. Every
+# placement therefore runs through _place(), which clamps the window fully
+# inside the available geometry of whichever screen it most overlaps (or
+# the nearest one when it overlaps none), and the heartbeat re-clamps
+# whenever the set of screen rectangles changes. reset_position() is the
+# manual escape hatch for consumers to expose.
 # ---------------------------------------------------------------------------
 
 import json
 import os
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -149,6 +160,87 @@ def _set_enabled(sid, value):
     _save_state(enabled=enabled)
 
 
+# --- screen-aware placement -------------------------------------------------
+
+def _screen_rects():
+    """Available geometry of every screen as (x, y, w, h) -- [] outside Qt."""
+    try:
+        _c, QtGui, _w = _qt()
+        app = QtGui.QGuiApplication.instance()
+        if app is None:
+            return []
+        out = []
+        for scr in app.screens():
+            g = scr.availableGeometry()
+            out.append((g.x(), g.y(), g.width(), g.height()))
+        return out
+    except Exception:
+        return []
+
+
+def _clamp_to_screens(x, y, w, h):
+    """Nudge a w*h window at (x, y) fully onto a real screen.
+
+    Home screen = the one it overlaps most; if it overlaps none (the usual
+    case after a resolution drop) the nearest by top-left distance. A dock
+    larger than its screen pins to the top-left rather than hanging off the
+    far edge.
+    """
+    rects = _screen_rects()
+    if not rects:
+        return x, y
+
+    def overlap(r):
+        rx, ry, rw, rh = r
+        return (max(0, min(x + w, rx + rw) - max(x, rx))
+                * max(0, min(y + h, ry + rh) - max(y, ry)))
+
+    best = max(rects, key=overlap)
+    if overlap(best) <= 0:
+        best = min(rects,
+                   key=lambda r: (r[0] - x) ** 2 + (r[1] - y) ** 2)
+    rx, ry, rw, rh = best
+    x = min(max(x, rx), rx + max(0, rw - w))
+    y = min(max(y, ry), ry + max(0, rh - h))
+    return x, y
+
+
+def _place(dock, x=None, y=None):
+    """Move the dock to (x, y) -- its saved spot by default -- on-screen.
+
+    A no-op when the window is already fully visible, so it is safe to call
+    on every show, every resize and every heartbeat that sees the screen
+    layout change. Pass explicit coordinates to clamp the dock where it
+    is now; omit them to restore the saved spot.
+
+    A window that has never been shown reports a stale size AND a stale
+    sizeHint (its labels are filled but the layout has not run), so the
+    layout is activated first -- measuring too small parks the dock by a
+    left edge that is already past the screen's right edge.
+    """
+    try:
+        state = _state()
+        if x is None:
+            x = state.get("x", 80)
+        if y is None:
+            y = state.get("y", 80)
+        try:
+            lay = dock.layout()
+            if lay is not None:
+                lay.activate()
+        except Exception:
+            pass
+        hint = dock.sizeHint()
+        w = max(dock.width(), hint.width(), 1)
+        h = max(dock.height(), hint.height(), 1)
+        nx, ny = _clamp_to_screens(int(x), int(y), w, h)
+        dock._screens = _screen_rects()
+        if (nx, ny) != (dock.x(), dock.y()):
+            dock.move(nx, ny)     # moveEvent persists the correction
+    except Exception:
+        pass                      # a HUD must never break an action
+
+
 # --- public API -------------------------------------------------------------
 
 def register(sid, title, refresh, menu, default_enabled=False,
@@ -207,6 +299,24 @@ def toggle(sid):
     return now
 
 
+def reset_position():
+    """Park the dock back at the default corner; True if one was placed.
+
+    The escape hatch for a dock lost off-screen -- placement is clamped
+    automatically, but a user who has already lost one needs a way back
+    that does not involve editing ~/.forge_hud.json.
+    """
+    _save_state(x=80, y=80)
+    st = _anchor()
+    if st.get("dock") is None:
+        ensure()                  # no-op when every section is hidden
+    dock = st.get("dock")
+    if dock is None:
+        return False
+    _place(dock, 80, 80)
+    return True
+
+
 def ensure():
     """Surface the dock if any enabled section belongs on the current tab."""
     st = _anchor()
@@ -219,13 +329,13 @@ def ensure():
         except Exception:
             return                # headless / no QApplication
         st["dock"] = dock
-        state = _state()
-        dock.move(int(state.get("x", 80)), int(state.get("y", 80)))
         _start_heartbeat(dock)
     try:
         dock.rebuild()
     except Exception:
         pass
+    # after rebuild, so the clamp measures the rail at its real size
+    _place(dock)
     _apply_context(force=True)
 
 
@@ -273,6 +383,7 @@ def _apply_context(force=False):
         here = any(dock._row_on_tab(sid, tab) for sid in dock._titles)
         if here:
             if not dock.isVisible():
+                _place(dock)      # never surface it off-screen
                 dock.show()
             dock.refresh_labels()
         else:
@@ -297,6 +408,11 @@ def _start_heartbeat(dock):
                     return
                 if _current_tab() != dock._last_tab:
                     _apply_context(force=True)
+                # a display that shrank (or vanished) under the dock leaves
+                # a frameless window stranded off-screen with no title bar
+                # to drag it back -- re-clamp when the layout changes
+                if _screen_rects() != getattr(dock, "_screens", None):
+                    _place(dock)
             except Exception:
                 pass              # a HUD must never break anything
 
@@ -501,6 +617,19 @@ def _make_dock():
             if self.isVisible():
                 _save_state(x=self.x(), y=self.y())
 
+        def showEvent(self, event):
+            # the first show is the first time the rail has a real size --
+            # re-clamp with it (a pre-show hint can be an underestimate)
+            super().showEvent(event)
+            _place(self, self.x(), self.y())
+
+        def resizeEvent(self, event):
+            # rows grow with their content ("14 ch . 31 gets"); a dock
+            # parked against the right edge must not grow off it
+            super().resizeEvent(event)
+            if self.isVisible():
+                _place(self, self.x(), self.y())
+
         def enterEvent(self, _event):
             # hover is the refresh signal for state that changed behind the
             # tools' backs (hand-deleted nodes) -- no QTimer, ever
@@ -532,6 +661,10 @@ def _make_dock():
                 import traceback
                 traceback.print_exc()
             popup.addSeparator()
+            # every section's popup carries the same footer: park the rail
+            # back at the default corner, or fold this section away
+            reset_act = popup.addAction("Reset HUD position")
+            reset_act.triggered.connect(lambda _c=False: reset_position())
             hide_act = popup.addAction("Hide {0} HUD".format(sec["title"]))
             hide_act.triggered.connect(lambda _c=False, s=sid: hide(s))
             popup.exec(lbl.mapToGlobal(lbl.rect().bottomLeft()))
