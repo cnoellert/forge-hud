@@ -6,13 +6,28 @@ Any FORGE distro (forge-takes, forge-wireless, …) registers a *section*;
 every enabled section renders as one row in a single frameless,
 always-on-top, draggable dock:
 
-    FORGE ▾
+    ⠿ FORGE ▾
     ● WIRELESS   14 ch · 31 gets
     ● TAKE       comp_v2  GMM_260
 
 The row anatomy is owned by the library so every section reads the same
 way: status dot, then the section title as a small muted header in its own
 aligned column, then the section's content. Tools supply only the content.
+
+Left of the **FORGE** chip is the drag grip — a painted 2×3 dot grid
+(painted, not a font glyph, so it looks the same on every Flame box).
+The rail has always dragged from anywhere on itself and the grip narrows
+nothing: press anywhere, more than 5px of travel is a drag, a clean
+release is a click. The grip rests at the window's own border colour and
+brightens under the cursor, so the affordance appears exactly when it is
+actionable, and clicking it does nothing at all — it is a handle, not a
+button.
+
+Brightness is the whole signal by necessity: **Flame owns the pointer
+application-wide**, so per-widget `setCursor()` (an open hand over the
+chrome, a pointing hand over the rows) never reaches the screen — verified
+live on 2026.2.2. Tooltips are the only second channel available. Don't
+re-add cursor handling expecting it to work.
 
 Clicking a row opens that section's own popup menu — the channel palette
 for wireless, the take switcher for takes — built fresh by the owning tool

@@ -43,6 +43,20 @@
 #     ● WIRELESS   12 ch · 31 gets
 #     ● TAKE       comp_v2  GMM_260
 #
+# A painted 2x3 dot grip sits left of the FORGE chip -- the signpost for a
+# rail that has always dragged from anywhere on itself but never said so.
+# It narrows nothing: press anywhere, >5px of travel is still a drag. It
+# rests at the window's border colour and brightens on hover, so the
+# affordance shows up exactly when it is actionable.
+#
+# Brightness is the WHOLE message, because cursor shape is not available to
+# us: Flame owns the pointer application-wide, and per-widget setCursor()
+# (OpenHand over the chrome, PointingHand over the rows -- the obvious other
+# half) is simply overridden, verified live on 2026.2.2. Note this cuts both
+# ways: the blanket PointingHandCursor this dock used to set never reached
+# the screen either. Do not re-add cursor handling expecting it to work; if
+# you want a second channel, it has to be tooltips.
+#
 # dot (refresh's "dot", crimson on "alert") + the section title as a small
 # muted header in its own aligned column + the section's content ("html",
 # content only -- no dot, no tool name). Without the header column, a row
@@ -91,12 +105,16 @@
 import json
 import os
 
-__version__ = "1.5.0"
+__version__ = "1.6.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
 # FORGE family theme (byte-compatible with forge-wireless / forge-takes).
 EMBER = "#E87E24"
+# The drag grip: resting at the window's own border colour (present, but it
+# asks for nothing), brightening to the row-title grey under the cursor.
+GRIP_REST = "#3a3f4f"
+GRIP_HOVER = "#8a93a4"
 MENU_SS = (
     "QMenu { background: #23262f; color: #ccc; border: 1px solid #3a3f4f; "
     "  font-size: 12px; padding: 4px; }"
@@ -110,6 +128,51 @@ MENU_SS = (
 def _qt():
     from PySide6 import QtCore, QtGui, QtWidgets   # Flame 2025+
     return QtCore, QtGui, QtWidgets
+
+
+# --- the drag grip ----------------------------------------------------------
+#
+# Six dots in a 2x3 grid, the universal "this moves" mark. PAINTED, not a
+# glyph: the obvious spellings (braille U+283F, a double U+22EE) are at the
+# mercy of whatever fonts the host happens to carry, and a tofu box in the
+# corner of the rail is worse than no grip at all. A pixmap renders the same
+# on every Flame box there is.
+#
+# It is a signpost, not a hit target -- the whole dock still drags, exactly
+# as it always has. _click() ignores the grip label precisely because a
+# handle that does something when clicked is a button pretending to be a
+# handle.
+
+_GRIP_DOT = 2       # dot diameter, px
+_GRIP_PITCH = 4     # dot centre-to-centre, px
+_GRIP_COLS = 2
+_GRIP_ROWS = 3
+_GRIP_W = _GRIP_PITCH * _GRIP_COLS - (_GRIP_PITCH - _GRIP_DOT)
+_GRIP_H = _GRIP_PITCH * _GRIP_ROWS - (_GRIP_PITCH - _GRIP_DOT)
+
+
+def _grip_pixmap(QtCore, QtGui, colour, ratio=1.0):
+    """A 2x3 dot grid in *colour*, crisp at *ratio* (hidpi device pixels)."""
+    ratio = max(1.0, float(ratio or 1.0))
+    pm = QtGui.QPixmap(int(_GRIP_W * ratio), int(_GRIP_H * ratio))
+    pm.setDevicePixelRatio(ratio)
+    pm.fill(QtCore.Qt.transparent)
+    p = QtGui.QPainter(pm)
+    try:
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QColor(colour))
+        for col in range(_GRIP_COLS):
+            for row in range(_GRIP_ROWS):
+                p.drawEllipse(
+                    QtCore.QRectF(col * _GRIP_PITCH * ratio,
+                                  row * _GRIP_PITCH * ratio,
+                                  _GRIP_DOT * ratio, _GRIP_DOT * ratio))
+    finally:
+        # an unended QPainter on a pixmap that then gets reused is a live
+        # Qt warning storm; end it even if the loop above threw
+        p.end()
+    return pm
 
 
 # --- process-global anchor (survives reloads) ------------------------------
@@ -438,7 +501,8 @@ def _make_dock():
                 | QtCore.Qt.Tool,
             )
             self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-            self.setCursor(QtCore.Qt.PointingHandCursor)
+            # no setCursor anywhere in this class: Flame overrides it (see
+            # the module header). The grip's brightness is the affordance.
             self._press = None
             self._offset = None
             self._moved = False
@@ -453,12 +517,28 @@ def _make_dock():
             # the window tracks its content size automatically -- rows come
             # and go (enable/disable/collapse) and labels change width
             lay.setSizeConstraint(QtWidgets.QLayout.SetFixedSize)
+            # header row: the drag grip, then the FORGE chip. The grip sits
+            # left of the chip so it holds the same spot collapsed or not.
+            self._grips = {}                      # colour -> QPixmap cache
+            self.grip = QtWidgets.QLabel("", self)
+            self.grip.setToolTip("Drag anywhere on the rail to move it")
+            self.grip.setStyleSheet("background: transparent;")
             self.header = QtWidgets.QLabel("", self)
             self.header.setTextFormat(QtCore.Qt.RichText)
+            self.header.setToolTip("Drag to move \u00b7 click to collapse")
             self.header.setStyleSheet(
                 "color: #ddd; font-size: 11px; font-weight: bold; "
                 "background: transparent;")
-            lay.addWidget(self.header)
+            hrow = QtWidgets.QHBoxLayout()
+            hrow.setContentsMargins(0, 0, 0, 0)
+            hrow.setSpacing(7)
+            hrow.addWidget(self.grip, 0, QtCore.Qt.AlignVCenter)
+            # the chip takes the rest of the row, so a click anywhere right
+            # of the grip still collapses -- as it did when the header label
+            # spanned the whole rail
+            hrow.addWidget(self.header, 1)
+            lay.addLayout(hrow)
+            self._set_grip(GRIP_REST)
             # two aligned columns: "● TITLE" headers left, content right
             self._grid = QtWidgets.QGridLayout()
             self._grid.setHorizontalSpacing(10)
@@ -518,6 +598,19 @@ def _make_dock():
             self.refresh_labels()
 
         # -- content --------------------------------------------------------
+
+        def _set_grip(self, colour):
+            """Repaint the grip in *colour* (cached per colour + ratio)."""
+            try:
+                ratio = float(self.devicePixelRatioF())
+            except Exception:
+                ratio = 1.0
+            key = (colour, ratio)
+            pm = self._grips.get(key)
+            if pm is None:
+                pm = _grip_pixmap(QtCore, QtGui, colour, ratio)
+                self._grips[key] = pm
+            self.grip.setPixmap(pm)
 
         def refresh_labels(self):
             collapsed = bool(_state().get("collapsed"))
@@ -634,11 +727,25 @@ def _make_dock():
             # hover is the refresh signal for state that changed behind the
             # tools' backs (hand-deleted nodes) -- no QTimer, ever
             self.refresh_labels()
+            # ...and the moment the affordance is actionable is the moment
+            # it becomes visible: the grip lights up under the cursor
+            self._set_grip(GRIP_HOVER)
+
+        def leaveEvent(self, _event):
+            # a plain override, not an event filter -- crash #16 rules hold.
+            # No "did it really leave?" guard is needed, and this is
+            # confirmed live, not just reasoned from Qt's enter/leave
+            # ancestor-chain pruning: crossing from the rail onto one of its
+            # own labels sends the dock nothing, so the grip stays lit for
+            # the whole hover and dims only on a real exit.
+            self._set_grip(GRIP_REST)
 
         # -- click targets --------------------------------------------------
 
         def _click(self, pos):
             target = self.childAt(pos)
+            # the grip deliberately matches nothing below: it is a handle,
+            # and a handle that acts on click is a button in disguise
             if target is self.header:
                 _save_state(collapsed=not bool(_state().get("collapsed")))
                 self._apply_collapse()
