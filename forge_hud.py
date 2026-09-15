@@ -105,7 +105,7 @@
 import json
 import os
 
-__version__ = "1.6.1"
+__version__ = "1.6.2"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -152,7 +152,19 @@ _GRIP_H = _GRIP_PITCH * _GRIP_ROWS - (_GRIP_PITCH - _GRIP_DOT)
 
 
 def _grip_pixmap(QtCore, QtGui, colour, ratio=1.0):
-    """A 2x3 dot grid in *colour*, crisp at *ratio* (hidpi device pixels)."""
+    """A 2x3 dot grid in *colour*, crisp at *ratio* (hidpi device pixels).
+
+    The pixmap is allocated in DEVICE pixels and then told its ratio, but every
+    drawing coordinate below is LOGICAL. That is not a style choice: once a
+    pixmap carries a device pixel ratio, QPainter scales drawing operations by
+    it automatically, so multiplying coordinates by the ratio as well applies
+    it twice. On a retina display that put four of the six dots outside a
+    6x10 pixmap and clipped the rest to a couple of blobs in one column.
+
+    It also hid: __init__ paints before the widget is shown, when the ratio
+    still reads 1.0 and the arithmetic is accidentally right. Only the first
+    hover - which repaints at the real ratio - revealed it.
+    """
     ratio = max(1.0, float(ratio or 1.0))
     pm = QtGui.QPixmap(int(_GRIP_W * ratio), int(_GRIP_H * ratio))
     pm.setDevicePixelRatio(ratio)
@@ -165,9 +177,8 @@ def _grip_pixmap(QtCore, QtGui, colour, ratio=1.0):
         for col in range(_GRIP_COLS):
             for row in range(_GRIP_ROWS):
                 p.drawEllipse(
-                    QtCore.QRectF(col * _GRIP_PITCH * ratio,
-                                  row * _GRIP_PITCH * ratio,
-                                  _GRIP_DOT * ratio, _GRIP_DOT * ratio))
+                    QtCore.QRectF(col * _GRIP_PITCH, row * _GRIP_PITCH,
+                                  _GRIP_DOT, _GRIP_DOT))
     finally:
         # an unended QPainter on a pixmap that then gets reused is a live
         # Qt warning storm; end it even if the loop above threw
