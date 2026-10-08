@@ -64,6 +64,7 @@ forge_hud.register(
                                #        "alert": bool, "dot": "#hex"}
     menu=my_menu,              # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
     default_enabled=False,     # first-run state (per-user file wins later)
+    key=my_key,                # optional, 1.7.0+: () -> hashable, polled
 )
 
 forge_hud.toggle("wireless")   # menu action; returns the new state
@@ -83,7 +84,11 @@ renders the dot and the `title` header itself), an optional `tooltip`, an
 collapsed chip (`alert` alone turns it crimson). `menu()` receives an
 empty styled `QMenu` and the Qt modules, and populates it; the library
 appends the separator, *Reset HUD position* and the per-section
-*Hide … HUD* entry itself.
+*Hide … HUD* entry itself. `key()` (optional, **1.7.0+**) names what the
+row is *about* — forge-takes passes the current batch group's name — and
+must be as cheap as `get_current_tab()`; see *Refresh model*. A consumer
+that may meet an older 1.x dock should fall back to registering without
+`key` on `TypeError`.
 
 ## Behaviour
 
@@ -122,6 +127,12 @@ appends the separator, *Reset HUD position* and the per-section
   checkpoints. Flame has no hook for node deletion or graph edits, so
   hover-refresh is the event-driven answer to state that changes behind
   the tools' backs.
+- **Keys (1.7.0).** Nor is there a hook for a Batch Group switch, so a
+  takes row went on naming the previous group until something else
+  redrew it (forge-takes#2). A section may register a `key`: the
+  heartbeat reads it on each tick while the dock is visible, beside the
+  tab getter, and redraws the rows when any key changes. The key is the
+  cheap part; `refresh()` runs only when one actually moved.
 - **Reload safety.** The registry, dock reference and heartbeat handle are
   anchored on `builtins` — deliberately **not** on the `QApplication`
   instance: PySide can garbage-collect the Python wrapper around the C++

@@ -19,7 +19,8 @@
 #                                   #        "alert": bool, "dot": "#hex"}
 #       menu=my_menu,               # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
 #       default_enabled=False,      # first-run state (per-user file wins later)
-#       tabs=("Batch",))            # Flame tabs where this section belongs
+#       tabs=("Batch",),            # Flame tabs where this section belongs
+#       key=my_key)                 # optional: () -> hashable, see below
 #   forge_hud.toggle("wireless")    # menu action; returns the new state
 #   forge_hud.ensure()              # show the dock if any section is enabled
 #   forge_hud.update()              # refresh row labels (action checkpoints)
@@ -73,6 +74,15 @@
 #   * popups rebuild live on click -- never stale
 #   * row labels refresh on mouse-enter, after every popup, and whenever the
 #     owning tool calls update() from its action checkpoints
+#   * and when a section's `key` changes. A key is a trivial getter naming
+#     WHAT the row is about -- forge-takes passes the current batch group's
+#     name -- read by the heartbeat on every tick while the dock is visible.
+#     A changed key redraws the rows. This exists because Flame has no hook
+#     for a batch group switch either: the takes row went on naming the
+#     previous group until something else happened to redraw it
+#     (forge-takes#2). The key must be as cheap as get_current_tab(), because
+#     it runs at the same rate; refresh() is NOT, and is only called when a
+#     key actually moved.
 # There is no Flame hook for node deletion or graph edits (verified against
 # the API inventory), so hover-refresh is the event-driven answer to state
 # that changes behind the tools' backs.
@@ -105,7 +115,7 @@
 import json
 import os
 
-__version__ = "1.6.2"
+__version__ = "1.7.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -318,10 +328,12 @@ def _place(dock, x=None, y=None):
 # --- public API -------------------------------------------------------------
 
 def register(sid, title, refresh, menu, default_enabled=False,
-             tabs=("Batch",)):
+             tabs=("Batch",), key=None):
     """Add or replace a HUD section. Safe to call at import time (no Qt is
     touched); safe to call again on module reload (replaces by id).
-    `tabs` names the Flame tabs the section belongs to (falsy = all)."""
+    `tabs` names the Flame tabs the section belongs to (falsy = all).
+    `key`, when given, is a cheap () -> hashable the heartbeat polls; the
+    rows redraw when it changes (see the staleness model)."""
     st = _anchor()
     if sid not in st["order"]:
         st["order"].append(sid)
@@ -331,6 +343,7 @@ def register(sid, title, refresh, menu, default_enabled=False,
         "menu": menu,
         "default": bool(default_enabled),
         "tabs": tuple(tabs) if tabs else (),
+        "key": key,
     }
     dock = st.get("dock")
     if dock is not None:
@@ -466,6 +479,32 @@ def _apply_context(force=False):
         pass                      # a HUD must never break an action
 
 
+def _section_keys(dock):
+    """{section id: key()} for every shown row whose section has a key.
+    A key that raises reads as None -- a HUD must never break anything."""
+    st = _anchor()
+    keys = {}
+    for sid in dock._titles:
+        getter = (st["sections"].get(sid) or {}).get("key")
+        if getter is None:
+            continue
+        try:
+            keys[sid] = getter()
+        except Exception:
+            keys[sid] = None
+    return keys
+
+
+def _keys_moved(dock):
+    """True when any shown section's key differs from the last tick's.
+    The first reading after a rebuild only records: refresh_labels() has
+    just run then anyway."""
+    keys = _section_keys(dock)
+    before = getattr(dock, "_keys", None)
+    dock._keys = keys
+    return before is not None and keys != before
+
+
 def _start_heartbeat(dock):
     """The dock's 600 ms tab watcher -- see the module header for why this
     is the one sanctioned QTimer. Parented to the dock (dies with it),
@@ -482,6 +521,8 @@ def _start_heartbeat(dock):
                     return
                 if _current_tab() != dock._last_tab:
                     _apply_context(force=True)
+                elif dock.isVisible() and _keys_moved(dock):
+                    dock.refresh_labels()
                 # a display that shrank (or vanished) under the dock leaves
                 # a frameless window stranded off-screen with no title bar
                 # to drag it back -- re-clamp when the layout changes
