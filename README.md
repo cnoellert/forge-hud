@@ -65,6 +65,7 @@ forge_hud.register(
     menu=my_menu,              # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
     default_enabled=False,     # first-run state (per-user file wins later)
     key=my_key,                # optional, 1.7.0+: () -> hashable, polled
+    on_tab=my_on_tab,          # optional, 1.8.0+: (tab) -> None, on a tab change
 )
 
 forge_hud.toggle("wireless")   # menu action; returns the new state

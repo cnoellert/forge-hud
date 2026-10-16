@@ -20,7 +20,8 @@
 #       menu=my_menu,               # (QMenu, (QtCore, QtGui, QtWidgets)) -> None
 #       default_enabled=False,      # first-run state (per-user file wins later)
 #       tabs=("Batch",),            # Flame tabs where this section belongs
-#       key=my_key)                 # optional: () -> hashable, see below
+#       key=my_key,                 # optional: () -> hashable, see below
+#       on_tab=my_on_tab)           # optional: (tab) -> None on a tab change
 #   forge_hud.toggle("wireless")    # menu action; returns the new state
 #   forge_hud.ensure()              # show the dock if any section is enabled
 #   forge_hud.update()              # refresh row labels (action checkpoints)
@@ -115,7 +116,7 @@
 import json
 import os
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -328,12 +329,16 @@ def _place(dock, x=None, y=None):
 # --- public API -------------------------------------------------------------
 
 def register(sid, title, refresh, menu, default_enabled=False,
-             tabs=("Batch",), key=None):
+             tabs=("Batch",), key=None, on_tab=None):
     """Add or replace a HUD section. Safe to call at import time (no Qt is
     touched); safe to call again on module reload (replaces by id).
     `tabs` names the Flame tabs the section belongs to (falsy = all).
     `key`, when given, is a cheap () -> hashable the heartbeat polls; the
-    rows redraw when it changes (see the staleness model)."""
+    rows redraw when it changes (see the staleness model).
+    `on_tab`, when given, is called with the new tab name each time the
+    heartbeat sees the Flame tab change -- so a section's own windows can
+    follow the dock off the Timeline and back (forge-streams' Lens). Never
+    allowed to raise into the heartbeat."""
     st = _anchor()
     if sid not in st["order"]:
         st["order"].append(sid)
@@ -344,6 +349,7 @@ def register(sid, title, refresh, menu, default_enabled=False,
         "default": bool(default_enabled),
         "tabs": tuple(tabs) if tabs else (),
         "key": key,
+        "on_tab": on_tab,
     }
     dock = st.get("dock")
     if dock is not None:
@@ -466,6 +472,13 @@ def _apply_context(force=False):
         if not force and tab == dock._last_tab:
             return
         dock._last_tab = tab
+        for sec in list(st["sections"].values()):
+            hook = sec.get("on_tab")
+            if hook is not None:
+                try:
+                    hook(tab)     # a section's windows follow the tab too
+                except Exception:
+                    pass
         dock._apply_collapse()    # re-filter rows for the new tab
         here = any(dock._row_on_tab(sid, tab) for sid in dock._titles)
         if here:
