@@ -144,6 +144,15 @@ that may meet an older 1.x dock should fall back to registering without
   the new code — no zombie pill, no lost registrations.
 - **State** — position, collapsed, per-section enabled — persists in
   `~/.forge_hud.json`.
+- **Pen log (1.8.1).** A diagnostic for a Wacom wedge seen on 2027.1: a pen
+  click on a FORGE window has left the driver reading every tip press as a
+  right click, everywhere, until it was restarted. The rail writes each
+  press, release, double-click and tablet press/release it's handed, focus
+  coming and going, drags and menus, to `/var/tmp/forge_pen.log` (it
+  restarts past 2 MB, keeping the last as `.1`). It is fed from the rail's
+  own handlers, with no event filter. `pen_note(source, what, event=None)`
+  lets a section's own windows add to the same log; the forge-streams Lens
+  does.
 
 ## Known consumers
 

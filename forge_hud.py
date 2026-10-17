@@ -116,7 +116,7 @@
 import json
 import os
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -243,6 +243,89 @@ def _set_enabled(sid, value):
     enabled = state.get("enabled", {})
     enabled[sid] = bool(value)
     _save_state(enabled=enabled)
+
+
+# --- the pen log (1.8.1) ----------------------------------------------------
+#
+# A diagnostic, not a feature. On 2027.1 a pen click on a FORGE window --
+# the Lens mostly, the rail once -- has left the Wacom driver treating every
+# tip press as a right-click, in every app, until the driver is restarted
+# [Chris, 2026-10-16]. Nothing read afterwards looked wrong, so this keeps
+# what led up to it: each press, release and double-click a FORGE window is
+# handed, the tablet events behind them, focus coming and going, and what
+# the tool did about it, a line each in one file. Passive: it reads an event
+# and never accepts, eats or changes one, and it is fed from each window's
+# own handlers -- no event filter here, none app-wide anywhere.
+
+PEN_LOG = "/var/tmp/forge_pen.log"
+_PEN_LOG_MAX = 2 * 1024 * 1024    # then it starts again, the last kept as .1
+
+
+def _pen_value(value):
+    name = getattr(value, "name", None)
+    if name:
+        return name
+    text = str(value)               # a flag of several: "MouseButton.A|B"
+    return text.split(".", 1)[-1] if "." in text else text
+
+
+def _pen_event(event):
+    """What an input event says, each part read on its own: a part this Qt
+    doesn't have is left out, never the line."""
+    parts = []
+
+    def add(label, read):
+        try:
+            parts.append("{0}={1}".format(label, read()))
+        except Exception:
+            pass
+    add("ev", lambda: _pen_value(event.type()))
+    add("button", lambda: _pen_value(event.button()))
+    add("buttons", lambda: _pen_value(event.buttons()))
+    add("mods", lambda: _pen_value(event.modifiers()))
+    add("device", lambda: "{0}/{1}".format(_pen_value(event.pointingDevice().type()),
+                                           event.pointingDevice().name()))
+    add("pointer", lambda: _pen_value(event.pointerType()))
+    add("at", lambda: "{0},{1}".format(int(event.globalPosition().x()),
+                                       int(event.globalPosition().y())))
+    add("pressure", lambda: "{0:.2f}".format(event.pressure()))
+    return " ".join(parts)
+
+
+def _pen_app():
+    """What the application thinks is held, and which window has focus."""
+    parts = []
+    try:
+        _c, QtGui, _w = _qt()
+        app = QtGui.QGuiApplication
+        parts.append("app_buttons=" + _pen_value(app.mouseButtons()))
+        parts.append("app_mods=" + _pen_value(app.keyboardModifiers()))
+        win = app.focusWindow()
+        parts.append("focus=" + ("none" if win is None else "{0}:{1}".format(
+            type(win).__name__, (win.title() or win.objectName() or "?")[:40])))
+    except Exception:
+        pass
+    return " ".join(parts)
+
+
+def pen_note(source, what, event=None):
+    """Add a line to the pen log: *source* is the window ("hud", "lens"),
+    *what* what happened, *event* the Qt event behind it if there is one.
+    Never raises."""
+    try:
+        import time
+        now = time.time()
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+        line = "{0}.{1:03d} {2} {3}".format(stamp, int(now % 1 * 1000), source, what)
+        if event is not None:
+            line += " | " + _pen_event(event)
+        line += " | " + _pen_app()
+        if os.path.exists(PEN_LOG) and os.path.getsize(PEN_LOG) > _PEN_LOG_MAX:
+            os.replace(PEN_LOG, PEN_LOG + ".1")
+        with open(PEN_LOG, "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass                      # a diagnostic must never break a click
 
 
 # --- screen-aware placement -------------------------------------------------
@@ -729,8 +812,12 @@ def _make_dock():
         # windows); the manual move() path is the fallback. During a system
         # move Qt delivers no further mouse events, so the position persists
         # from moveEvent instead of the release.
+        #
+        # Each handler also writes the pen log (see pen_note): what the rail
+        # is handed, before it acts on it.
 
         def mousePressEvent(self, event):
+            pen_note("hud", "press", event)
             if event.button() == QtCore.Qt.LeftButton:
                 self._press = event.globalPosition().toPoint()
                 self._offset = self._press - self.frameGeometry().topLeft()
@@ -752,6 +839,7 @@ def _make_dock():
                         started = bool(handle.startSystemMove())
                 except Exception:
                     started = False
+                pen_note("hud", "drag by the window system" if started else "drag by hand")
                 if started:
                     # the WM owns the drag now; no release will arrive
                     self._press = None
@@ -761,6 +849,7 @@ def _make_dock():
                 self.move(here - self._offset)
 
         def mouseReleaseEvent(self, _event):
+            pen_note("hud", "release", _event)
             if self._press is None:
                 return
             press_pos = self.mapFromGlobal(self._press)
@@ -770,6 +859,22 @@ def _make_dock():
                 _save_state(x=self.x(), y=self.y())
                 return
             self._click(press_pos)
+
+        def mouseDoubleClickEvent(self, event):
+            pen_note("hud", "double-click", event)
+            super().mouseDoubleClickEvent(event)  # Qt's own: a second press
+
+        def tabletEvent(self, event):
+            # the pen's own events, before Qt makes mouse events of them; a
+            # move is left out (there are hundreds), the rest kept
+            if event.type() != QtCore.QEvent.TabletMove:
+                pen_note("hud", "tablet", event)
+            event.ignore()                        # Qt then sends the mouse event
+
+        def changeEvent(self, event):
+            if event.type() == QtCore.QEvent.ActivationChange:
+                pen_note("hud", "focus in" if self.isActiveWindow() else "focus out")
+            super().changeEvent(event)
 
         def moveEvent(self, _event):
             if self.isVisible():
@@ -839,7 +944,9 @@ def _make_dock():
             reset_act.triggered.connect(lambda _c=False: reset_position())
             hide_act = popup.addAction("Hide {0} HUD".format(sec["title"]))
             hide_act.triggered.connect(lambda _c=False, s=sid: hide(s))
-            popup.exec(lbl.mapToGlobal(lbl.rect().bottomLeft()))
+            pen_note("hud", "menu open: " + sec["title"])
+            chosen = popup.exec(lbl.mapToGlobal(lbl.rect().bottomLeft()))
+            pen_note("hud", "menu closed: " + (chosen.text() if chosen is not None else "nothing"))
             self.refresh_labels()
 
     return Dock()
