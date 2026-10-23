@@ -66,6 +66,7 @@ forge_hud.register(
     default_enabled=False,     # first-run state (per-user file wins later)
     key=my_key,                # optional, 1.7.0+: () -> hashable, polled
     on_tab=my_on_tab,          # optional, 1.8.0+: (tab) -> None, on a tab change
+    on_tick=my_on_tick,        # optional, 1.9.0+: () -> None, every heartbeat
 )
 
 forge_hud.toggle("wireless")   # menu action; returns the new state
@@ -89,7 +90,13 @@ appends the separator, *Reset HUD position* and the per-section
 row is *about* — forge-takes passes the current batch group's name — and
 must be as cheap as `get_current_tab()`; see *Refresh model*. A consumer
 that may meet an older 1.x dock should fall back to registering without
-`key` on `TypeError`.
+`key` on `TypeError`. `on_tick()` (optional, **1.9.0+**) is called on every
+heartbeat, on every tab, whether the dock shows or not - for a section's
+own window watching something Flame fires nothing for (forge-streams'
+Segment Lens follows the timeline's current segment with it). It keeps
+the one-timer rule: no timer of its own, and it must be as cheap as a key,
+redrawing only when what it watches moved. Fall back without it on
+`TypeError`.
 
 ## Behaviour
 

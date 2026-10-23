@@ -21,7 +21,8 @@
 #       default_enabled=False,      # first-run state (per-user file wins later)
 #       tabs=("Batch",),            # Flame tabs where this section belongs
 #       key=my_key,                 # optional: () -> hashable, see below
-#       on_tab=my_on_tab)           # optional: (tab) -> None on a tab change
+#       on_tab=my_on_tab,           # optional: (tab) -> None on a tab change
+#       on_tick=my_on_tick)         # optional: () -> None on every heartbeat
 #   forge_hud.toggle("wireless")    # menu action; returns the new state
 #   forge_hud.ensure()              # show the dock if any section is enabled
 #   forge_hud.update()              # refresh row labels (action checkpoints)
@@ -116,7 +117,7 @@
 import json
 import os
 
-__version__ = "1.8.1"
+__version__ = "1.9.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -412,7 +413,7 @@ def _place(dock, x=None, y=None):
 # --- public API -------------------------------------------------------------
 
 def register(sid, title, refresh, menu, default_enabled=False,
-             tabs=("Batch",), key=None, on_tab=None):
+             tabs=("Batch",), key=None, on_tab=None, on_tick=None):
     """Add or replace a HUD section. Safe to call at import time (no Qt is
     touched); safe to call again on module reload (replaces by id).
     `tabs` names the Flame tabs the section belongs to (falsy = all).
@@ -421,7 +422,12 @@ def register(sid, title, refresh, menu, default_enabled=False,
     `on_tab`, when given, is called with the new tab name each time the
     heartbeat sees the Flame tab change -- so a section's own windows can
     follow the dock off the Timeline and back (forge-streams' Lens). Never
-    allowed to raise into the heartbeat."""
+    allowed to raise into the heartbeat.
+    `on_tick`, when given, is called on every heartbeat, on every tab, dock
+    shown or not -- for a section's own window that watches something Flame
+    fires nothing for (forge-streams' Segment Lens following the timeline's
+    current segment). It must be as cheap as a key: no I/O, no redraw unless
+    what it watches moved. Never allowed to raise into the heartbeat."""
     st = _anchor()
     if sid not in st["order"]:
         st["order"].append(sid)
@@ -433,6 +439,7 @@ def register(sid, title, refresh, menu, default_enabled=False,
         "tabs": tuple(tabs) if tabs else (),
         "key": key,
         "on_tab": on_tab,
+        "on_tick": on_tick,
     }
     dock = st.get("dock")
     if dock is not None:
@@ -601,6 +608,18 @@ def _keys_moved(dock):
     return before is not None and keys != before
 
 
+def _ticks():
+    """Every section's on_tick, each guarded -- a HUD must never break
+    anything, and one section's failure never starves another's."""
+    for sec in list(_anchor()["sections"].values()):
+        hook = sec.get("on_tick")
+        if hook is not None:
+            try:
+                hook()
+            except Exception:
+                pass
+
+
 def _start_heartbeat(dock):
     """The dock's 600 ms tab watcher -- see the module header for why this
     is the one sanctioned QTimer. Parented to the dock (dies with it),
@@ -619,6 +638,7 @@ def _start_heartbeat(dock):
                     _apply_context(force=True)
                 elif dock.isVisible() and _keys_moved(dock):
                     dock.refresh_labels()
+                _ticks()
                 # a display that shrank (or vanished) under the dock leaves
                 # a frameless window stranded off-screen with no title bar
                 # to drag it back -- re-clamp when the layout changes
