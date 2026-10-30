@@ -117,7 +117,7 @@
 import json
 import os
 
-__version__ = "1.9.0"
+__version__ = "1.9.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -374,6 +374,17 @@ def _clamp_to_screens(x, y, w, h):
     return x, y
 
 
+def _on_screen(dock):
+    """Whether the dock lies wholly inside one screen's available area --
+    True outside Qt, so a guard on it never moves anything there."""
+    rects = _screen_rects()
+    if not rects:
+        return True
+    x, y, w, h = dock.x(), dock.y(), dock.width(), dock.height()
+    return any(rx <= x and ry <= y and x + w <= rx + rw and y + h <= ry + rh
+               for rx, ry, rw, rh in rects)
+
+
 def _place(dock, x=None, y=None):
     """Move the dock to (x, y) -- its saved spot by default -- on-screen.
 
@@ -583,11 +594,15 @@ def _apply_context(force=False):
 
 
 def _section_keys(dock):
-    """{section id: key()} for every shown row whose section has a key.
+    """{section id: key()} for every shown row whose section has a key --
+    on this tab only: a row the tab hides needs no redraw.
     A key that raises reads as None -- a HUD must never break anything."""
     st = _anchor()
     keys = {}
+    tab = dock._last_tab
     for sid in dock._titles:
+        if not dock._row_on_tab(sid, tab):
+            continue
         getter = (st["sections"].get(sid) or {}).get("key")
         if getter is None:
             continue
@@ -644,6 +659,11 @@ def _start_heartbeat(dock):
                 # to drag it back -- re-clamp when the layout changes
                 if _screen_rects() != getattr(dock, "_screens", None):
                     _place(dock)
+                elif dock.isVisible() and not _on_screen(dock):
+                    # the window system can park a shown dock part off its
+                    # screen with no move we made (seen on 2027.1: y -20 on
+                    # a saved y 0, its top clipped) -- walk it back
+                    _place(dock, dock.x(), dock.y())
             except Exception:
                 pass              # a HUD must never break anything
 
@@ -782,9 +802,13 @@ def _make_dock():
 
         def refresh_labels(self):
             collapsed = bool(_state().get("collapsed"))
+            tab = _current_tab()
             dots = []
             for sid in st["order"]:
-                if sid not in self._titles:
+                # a row this tab hides is neither read nor dotted: on the
+                # Timeline the Batch rows' refresh ran for nothing, and the
+                # folded rail showed a dot for each of them
+                if sid not in self._titles or not self._row_on_tab(sid, tab):
                     continue
                 sec = st["sections"].get(sid)
                 if sec is None:

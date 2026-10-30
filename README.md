@@ -161,6 +161,20 @@ redrawing only when what it watches moved. Fall back without it on
   lets a section's own windows add to the same log; the forge-streams Lens
   does.
 
+- **Rows on one tab only (1.9.1).** A row the current tab hides is not
+  refreshed, its key is not read, and the folded rail shows no dot for it:
+  on the Timeline the Batch rows were read on every redraw, and folded,
+  the rail showed a dot for each. The heartbeat also walks a shown dock
+  back onto its screen when the window system has parked it part off one
+  with no move of ours (seen on 2027.1: at y −20 on a saved y 0, its top
+  clipped).
+
+## Backlog
+
+- **Fold the rail to a tab-like strip** (Chris, 2026-10-30): beyond the
+  header chip and its dots, collapse the HUD to something that sits like a
+  tab at a screen edge.
+
 ## Known consumers
 
 | distro | section | row shows | popup |
