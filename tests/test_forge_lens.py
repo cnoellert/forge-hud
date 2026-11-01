@@ -87,12 +87,18 @@ def follower(seq):
     return fl.Follower(fl.Timeline(flame)), flame
 
 
+def focus_on(seq, track):
+    seq.primary_track = seq.version.tracks[track]
+
+
 @needs_linktest2
 def test_the_playhead_finds_the_top_picture_not_the_fx_gap():
     """LINKTEST2: track 3's Gap Timeline FX covers the whole cut. At
-    GMM_230's first frames the viewer shows V2's GMM_410 over it, and that is
-    the subject -- never "Gap on track 3" [LIVE 2027.1, 2026-11-01]."""
+    GMM_230's first frames the viewer shows V2's GMM_410 over it, and with
+    the focus on the gap's track that is the subject -- never "Gap on track
+    3" [LIVE 2027.1, 2026-11-01]."""
     seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    focus_on(seq, 2)
     f, _ = follower(seq)
     seq._now = fakeflame.Time(86600)                # GMM_230's 5th frame
     ctx, moved, _s, _f = f.tick("Timeline")
@@ -105,8 +111,103 @@ def test_the_playhead_finds_the_top_picture_not_the_fx_gap():
 
 
 @needs_linktest2
+def test_the_playhead_reads_the_focused_track_not_the_top_one():
+    """Chris, 2026-11-01: "the playhead can be over something, a second
+    layer, and be reading that when the focus is actually on the track
+    beneath." The focus is seq.primary_track."""
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    focus_on(seq, 0)
+    f, _ = follower(seq)
+    walks = []
+    real = f.tl.walk
+    f.tl.walk = lambda s: walks.append(1) or real(s)
+    seq._now = fakeflame.Time(86600)
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert ctx.source == "playhead" and ctx.primary.key == "GMM_230"
+    assert ctx.visible.key == "GMM_410 (track 2)"          # what the viewer shows
+    assert [s.key for s in ctx.over] == ["gap on track 3 at 86448", "GMM_410 (track 2)"]
+    # the focus up a track: the subject moves, with no walk of the cut
+    focus_on(seq, 1)
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert moved and ctx.primary.key == "GMM_410 (track 2)" and len(walks) == 1
+    assert f.focus_track == 1
+    # a focused track with nothing at the frame: the top picture there
+    seq._now = fakeflame.Time(86450)                        # GMM_400, V1 only
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert ctx.primary.key == "GMM_400"
+
+
+@needs_linktest2
+def test_a_focus_the_walk_doesnt_know_walks_once_not_every_beat():
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    f, _ = follower(seq)
+    walks = []
+    real = f.tl.walk
+    f.tl.walk = lambda s: walks.append(1) or real(s)
+    seq._now = fakeflame.Time(86600)
+    f.tick("Timeline")
+    seq.primary_track = fakeflame.Track([])                 # another version's
+    for _ in range(4):
+        ctx, _m, _s, _f = f.tick("Timeline")
+    assert len(walks) == 2 and ctx.primary.key == "GMM_410 (track 2)"
+
+
+@needs_linktest2
+def test_a_click_leads_until_the_playhead_moves():
+    """A plain click selects nothing in Flame; the clicked segment is the
+    subject until the playhead moves on, then the playhead leads again."""
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    focus_on(seq, 1)
+    f, flame = follower(seq)
+    seq._now = fakeflame.Time(86600)
+    f.tick("Timeline")
+    flame.timeline.current_segment = seq.seg("GMM_230")     # beneath the playhead's
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert moved and ctx.source == "click" and ctx.primary.key == "GMM_230"
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert not moved and ctx.source == "click"
+    seq._now = fakeflame.Time(86601)
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert moved and ctx.source == "playhead" and ctx.primary.key == "GMM_410 (track 2)"
+    # a click that moved the positioner in the same beat: the click wins
+    flame.timeline.current_segment = seq.seg("GMM_400")
+    seq._now = fakeflame.Time(86450)
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert ctx.source == "click" and ctx.primary.key == "GMM_400"
+    # twins by name: the segment itself decides, not (name, record in)
+    flame.timeline.current_segment = seq.seg("GMM_430")
+    ctx, _m, _s, _f = f.tick("Timeline")
+    assert ctx.primary.key == "GMM_430"
+    flame.timeline.current_segment = seq.seg("GMM_430 (track 2)")
+    ctx, _m, _s, _f = f.tick("Timeline")
+    assert ctx.primary.key == "GMM_430 (track 2)"
+
+
+@needs_linktest2
+def test_reveal_holds_until_the_playhead_lands_then_moves_on():
+    """focus(key): the subject is key while the playhead travels there (on
+    the idle queue) and until it moves on from there."""
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    focus_on(seq, 1)
+    f, _ = follower(seq)
+    seq._now = fakeflame.Time(86450)
+    f.tick("Timeline")
+    g230 = f.cut.by_key["GMM_230"]
+    f.reveal("GMM_230", g230.record_in)
+    ctx, _m, _s, _f = f.tick("Timeline")                     # not there yet
+    assert ctx.source == "click" and ctx.primary.key == "GMM_230"
+    seq._now = fakeflame.Time(g230.record_in)                # landed
+    ctx, _m, _s, _f = f.tick("Timeline")
+    assert ctx.primary.key == "GMM_230"
+    seq._now = fakeflame.Time(g230.record_in + 1)
+    ctx, _m, _s, _f = f.tick("Timeline")
+    assert ctx.source == "playhead"
+
+
+@needs_linktest2
 def test_selection_beats_the_playhead_and_a_click_ends_spine_follow():
     seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    focus_on(seq, 1)
     f, flame = follower(seq)
     seq._now = fakeflame.Time(86600)
     f.tick("Timeline")

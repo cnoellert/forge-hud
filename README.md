@@ -191,7 +191,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
   one with the new code.
 
-## The one Lens (`forge_lens.py`, 0.1.0)
+## The one Lens (`forge_lens.py`, 0.2.0)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -202,11 +202,13 @@ timeline).
 
 The window owns what the areas share, once:
 
-- **The subject.** The selection, else the top *picture* segment at the
-  playhead (a gap that only carries an effect is an adjustment layer — the
-  subject only when selected or alone), the pin over both. Read on the
-  heartbeat from a handful of getters; the cut is walked only on a click, a
-  sequence change or Refresh. Every area gets it as a `Ctx`: `segments`,
+- **The subject.** The last thing the artist did wins: the pin; a
+  selection; a segment clicked in the timeline, until the playhead moves;
+  else the playhead's segment on the **focused track** (`primary_track`),
+  else the top *picture* there (a gap that only carries an effect is an
+  adjustment layer — the subject only when focused, selected or alone).
+  Read on the heartbeat from a handful of getters; the cut is walked only on
+  a click, a sequence change, a focus on another version, or Refresh. Every area gets it as a `Ctx`: `segments`,
   `primary`, `source`, `over` (what is stacked over it), `visible`,
   `settled` (unchanged two beats running), `playing`, `frame`, `tags`, and
   the cut, keyed exactly as forge-takes' `shot_keys` / forge-streams'
@@ -215,8 +217,10 @@ The window owns what the areas share, once:
 - **The spine.** The cut, small, one painter: take colours fill (from the
   areas' overlays), tones never do; a preview's marks fill, outline, dash or
   dim the rest, with a caption under it. Sized once per subject to the cut
-  plus every area's `extent`, so a preview never grows it. Dragged, it
-  scrubs the positioner (on the idle queue; nothing moves on the press).
+  plus every area's `extent`, so a preview never grows it. Two ways to
+  move in time: the playhead's line (and the tab on it) drags to scrub; a
+  click on a segment puts the playhead on its first frame and pins the Lens
+  there. Nothing moves on the press; Flame is moved on the idle queue.
 - **The window.** forge-streams' `LensWindow` chrome, moved here: a
   frameless `Qt.Tool`, dragged by its header, sized by outline grips applied
   on release, narrow or wide, each placed where it was last left; hidden

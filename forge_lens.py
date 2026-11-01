@@ -9,12 +9,16 @@
 # (forge-streams), later the Cut and the Batch tab's lenses. The window owns
 # what they share, once:
 #
-#   * the SUBJECT -- the sequence and its segment(s), followed or pinned,
-#     read on forge_hud's heartbeat and handed to every area as a context.
-#     Areas never read the timeline to find out where they are;
+#   * the SUBJECT -- the sequence and its segment(s), read on forge_hud's
+#     heartbeat and handed to every area as a context. The last thing the
+#     artist did wins: the pin; a selection; a segment clicked in the
+#     timeline, until the playhead moves; else the playhead's segment on the
+#     FOCUSED track (seq.primary_track), else the top picture there. Areas
+#     never read the timeline to find out where they are;
 #   * the SPINE -- the cut, drawn small, at the top. One painter. Areas
 #     contribute overlays and previews (marks) to it, never a cut of their
-#     own; pressing or dragging it scrubs the playhead;
+#     own. Its playhead line (and the tab on it) drags to scrub; a click on
+#     a segment puts the playhead on it and pins the Lens there;
 #   * the WINDOW -- forge-streams' LensWindow chrome, moved here: frameless
 #     Qt.Tool, dragged by its header, sized by outline grips applied on
 #     release, narrow or wide, each placed where it was last left, hidden
@@ -42,7 +46,8 @@
 #       follows=(),              # area ids whose update() refreshes this one
 #       wide=False)              # may this area draw wide
 #   forge_lens.open() / toggle() / close() / is_open()
-#   forge_lens.focus(key)        # move the subject (follows the playhead)
+#   forge_lens.focus(key)        # the playhead to key, key the subject till it moves
+#   forge_lens.scrub(frame)      # the playhead, as the spine's drag moves it
 #   forge_lens.update(area_id)   # this area's state changed (None = all)
 #   forge_lens.preview(area_id, marks | None, caption=None)
 #   forge_lens.same_as(area_id, key, signature) -> [(area_id, label)]
@@ -75,7 +80,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -430,10 +435,11 @@ class Cut(object):
     """The patched version's keyed segments, top track last -- walked once
     per click, sequence change or Refresh, never per heartbeat."""
 
-    def __init__(self, segs, objects=None, name="", uid="", tags=(), start=0):
+    def __init__(self, segs, objects=None, name="", uid="", tags=(), start=0, tracks=()):
         self.segs = list(segs)
         self.by_key = dict((s.key, s) for s in self.segs)
         self.objects = dict(objects or {})
+        self.track_objs = list(tracks)      # the walked version's PyTracks, by index
         self.name, self.uid, self.tags, self.start = name, uid, tuple(tags), start
         self.tracks = (max(s.track for s in self.segs) + 1) if self.segs else 0
         self.lo = min(s.record_in for s in self.segs) if self.segs else 0
@@ -475,6 +481,22 @@ class Cut(object):
             if s.kind == "picture":
                 return s
         return here[0] if here else None
+
+    def on_track(self, track, frame):
+        """The picture segment on *track* at *frame*, or None (a gap there)."""
+        return next((s for s in self.at(frame) if s.track == track and s.kind == "picture"),
+                    None)
+
+    def under_playhead(self, frame, focus=None):
+        """The subject the playhead gives: the picture on the focused track
+        at *frame* -- the artist's focus, not the top of the stack [Chris,
+        2026-11-01: "the playhead can be over something, a second layer, and
+        be reading that when the focus is actually on the track beneath"] --
+        else, where that track has nothing there, the top picture."""
+        if frame is None:
+            return None
+        hit = self.on_track(focus, frame) if focus is not None else None
+        return hit or self.top_picture(frame)
 
     def over(self, seg, frame):
         """What is stacked over *seg* at *frame* (else its first frame), top
@@ -546,9 +568,10 @@ class Timeline(object):
         rows, objs = [], []
         try:
             version = self._primary(seq)
+            tracks = list(version.tracks)
         except Exception:
             return Cut([])
-        for ti, track in enumerate(version.tracks):
+        for ti, track in enumerate(tracks):
             for seg in track.segments:
                 try:
                     gap = str(seg.type).startswith("Gap")
@@ -574,7 +597,47 @@ class Timeline(object):
         except Exception:
             start = 0
         return Cut.from_rows(rows, objs, name=_s(seq.name), uid=self.uid(seq), tags=tags,
-                             start=start)
+                             start=start, tracks=tracks)
+
+    def focused(self, seq, cut):
+        """The focused track -- ``seq.primary_track``, the patch the artist
+        sets -- as (index in *cut*'s version, track). Index None: no focus,
+        or a track of another version than the one walked (walk again).
+        Cheap: one getter and a few comparisons; PyTrack == holds across
+        reads [LIVE 2027.1, 2026-11-01: ~1 us on TST_publish's 5 tracks]."""
+        try:
+            track = _v(seq.primary_track)
+        except Exception:
+            return None, None
+        if track is None:
+            return None, None
+        for i, t in enumerate(cut.track_objs):
+            try:
+                if t == track:
+                    return i, track
+            except Exception:
+                continue
+        return None, track
+
+    def clicked_key(self, cut, clicked):
+        """The key of the segment last clicked in the timeline: by the
+        segment itself (PySegment == holds [LIVE 2027.1, 2026-11-01]), else
+        by (name, record in)."""
+        try:
+            seg = self.flame.timeline.current_segment
+        except Exception:
+            seg = None
+        if seg is not None:
+            for key, obj in cut.objects.items():
+                try:
+                    if obj == seg:
+                        return key
+                except Exception:
+                    continue
+        if clicked is None:
+            return None
+        return next((s.key for s in cut.segs
+                     if (segment_base(s.key), s.record_in) == (clicked[0], clicked[1])), None)
 
     def selected(self, cut):
         """The keys selected in the Timeline, in cut order. A segment's
@@ -599,10 +662,21 @@ class Timeline(object):
 
 
 class Follower(object):
-    """The subject, on the heartbeat: the selection, else the top picture
-    segment at the playhead; the pin overrides both. Using the spine (or
-    focus()) follows the playhead until the next click in the timeline.
-    tick() returns (ctx, moved, settled_now, frame_moved)."""
+    """The subject, on the heartbeat. The last thing the artist did wins
+    [Chris, 2026-11-01]:
+
+    - the pin, over everything;
+    - a selection, while there is one;
+    - a segment clicked in the timeline (source "click"), until the
+      playhead next moves -- a plain click selects nothing in Flame;
+    - else the playhead: the picture on the focused track at its frame,
+      else the top picture (``Cut.under_playhead``).
+
+    Using the spine, or focus(), follows the playhead until the next click
+    in the timeline. tick() returns (ctx, moved, settled_now, frame_moved)."""
+
+    #: Beats a reveal waits for the playhead to land before it holds anyway.
+    LAND_BEATS = 3
 
     def __init__(self, timeline=None):
         self.tl = timeline or Timeline()
@@ -616,6 +690,12 @@ class Follower(object):
         self._same = 0
         self._frame = None
         self._walk_asked = True
+        self._stale = None            # a focused track the walk didn't find
+        self.click = None             # the key clicked, held until the playhead moves
+        self._click_frame = None      # ...from this frame
+        self._click_seen = False      # the playhead has been there
+        self._click_wait = 0
+        self.focus_track = None       # the focused track's index in the cut
         self.ctx = Ctx()
 
     def rewalk(self):
@@ -624,8 +704,19 @@ class Follower(object):
     def pin(self, on):
         self.pinned = [s.key for s in self.ctx.segments] if on and self.ctx.segments else None
 
+    def pin_keys(self, keys):
+        self.pinned = list(keys) or None
+
     def follow_playhead(self):
         self.spine = True
+        self.click = None
+
+    def reveal(self, key, frame):
+        """*key* is the subject, the playhead on its way to *frame*; it holds
+        until the playhead moves on from there (focus())."""
+        self.spine = True             # over a selection, as a spine use is
+        self.click, self._click_frame = key, frame
+        self._click_seen, self._click_wait = False, 0
 
     def tick(self, tab=None):
         seq = self.tl.sequence()
@@ -638,25 +729,48 @@ class Follower(object):
         clicked = self.tl.clicked()
         first = uid != self.uid
         click = clicked != self._clicked and not first
-        if first or click or self._walk_asked:
+        focus, track = self.tl.focused(seq, self.cut)
+        stale = focus is None and track is not None and not (
+            self._stale is not None and self._stale == track)
+        if first or click or self._walk_asked or stale:
             self.cut = self.tl.walk(seq)
             self.selection = self.tl.selected(self.cut)
             self._walk_asked = False
+            focus, track = self.tl.focused(seq, self.cut)
+            self._stale = track if focus is None else None
             if click:
                 self.spine = False    # a click in the timeline ends spine-follow
             if first:
-                self.pinned, self.spine = None, False
+                self.pinned, self.spine, self.click = None, False, None
         self.uid, self._clicked = uid, clicked
+        self.focus_track = focus
         cut = self.cut
         frame = self.tl.frame(seq)
+        if click:
+            # the click wins, even where it moved the positioner this beat
+            self.click = self.tl.clicked_key(cut, clicked)
+            self._click_frame, self._click_seen = frame, True
+        elif self.click is not None:
+            if frame == self._click_frame:
+                self._click_seen = True
+            elif self._click_seen:
+                self.click = None     # the playhead moved on: it leads again
+            else:
+                self._click_wait += 1
+                if self._click_wait >= self.LAND_BEATS:   # it never landed
+                    self._click_frame, self._click_seen = frame, True
+        if self.click is not None and self.click not in cut.by_key:
+            self.click = None
         if self.pinned:
             segs, source = [cut.by_key[k] for k in self.pinned if k in cut.by_key], "pin"
         elif self.selection and not self.spine:
             segs, source = [cut.by_key[k] for k in self.selection if k in cut.by_key], \
                 "selection"
+        elif self.click is not None:
+            segs, source = [cut.by_key[self.click]], "click"
         else:
-            top = cut.top_picture(frame) if frame is not None else None
-            segs, source = ([top] if top else []), "playhead"
+            here = cut.under_playhead(frame, focus)
+            segs, source = ([here] if here else []), "playhead"
         primary = None
         if segs:
             # the one last clicked leads a selection, where it is one of them
@@ -773,10 +887,33 @@ def update(area_id=None):
 
 def focus(key):
     """Move the subject to the segment *key*: the positioner to its first
-    frame (on Flame's idle queue), the subject following the playhead."""
+    frame (on Flame's idle queue), *key* the subject until the playhead moves
+    on from there -- then the playhead leads, on the focused track."""
     win = _anchor().get("window")
     if win is not None:
         win.focus(key)
+
+
+def scrub(frame, done=True):
+    """The playhead to record *frame*, as the spine's own drag moves it: on
+    Flame's idle queue, the latest frame only, the subject following the
+    playhead (an area's own playhead line, e.g. takes' wide lanes). With no
+    window open, the positioner moves anyway, on the idle queue."""
+    win = _anchor().get("window")
+    if win is not None:
+        win.scrub(int(frame), done=done)
+        return
+    tl = Timeline()
+
+    def go():
+        seq = tl.sequence()
+        if seq is not None:
+            try:
+                start = _frame(seq.start_time)
+            except Exception:
+                start = 0
+            tl.move_to(seq, frame, start)
+    later(go)
 
 
 def preview(area_id, marks, caption=None):
@@ -1658,10 +1795,23 @@ else:
         dashed, dim the rest -- never a tone fill (r3: take colours fill,
         tones stroke). Sized once per subject to the cut plus every area's
         extent, so a preview never grows it or slides a shot (streams
-        816ae57). Pressed and dragged, it scrubs: nothing changes in Flame on
-        the press, only on the move and the release, on the idle queue."""
+        816ae57). Two ways to move in time, as the Takes Lens has them
+        (forge-takes 59b5b28) [Chris, 2026-10-31: "It should only be
+        draggable when directly clicked and dragged. If I click on a segment
+        the behavior should be as before."]:
+
+        - pressed on the playhead's line (GRAB px) or its tab, a drag scrubs
+          and the subject follows the playhead;
+        - pressed anywhere else, a click acted on at release over the same
+          segment: the playhead to its first frame, the window pinned on it.
+
+        Nothing in Flame moves on the press, only on a drag or a release, on
+        the idle queue."""
 
         ROW, GAP, PAD = 11, 3, 6
+        #: How near the playhead's line a press grabs it, in pixels -- room
+        #: for a pen (forge-takes' GRAB).
+        GRAB = 5
 
         def __init__(self, win):
             QtWidgets.QWidget.__init__(self)
@@ -1673,7 +1823,9 @@ else:
             self.subject = set()
             self.fills = {}
             self.marks = []
-            self._press = False
+            self._press = False       # the playhead grabbed
+            self._down = None         # the segment pressed, acted on at release
+            self._lit = False         # the line can be grabbed
             self.hold(())
 
         def hold(self, extents):
@@ -1758,9 +1910,30 @@ else:
             first, last, _t = self.span
             if self.frame is not None and first <= self.frame <= last:
                 px = self._x(self.frame) + 0.5
+                lit = self._lit or self._press
                 p.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1.4))
                 p.drawLine(QtCore.QPointF(px, 1), QtCore.QPointF(px, self.height() - 1))
+                # its grip: a small tab on top, brighter while it can be
+                # grabbed -- Flame owns the pointer, so brightness is the sign
+                tab = QtGui.QPainterPath()
+                tab.moveTo(px - 4, 0)
+                tab.lineTo(px + 4, 0)
+                tab.lineTo(px, self.PAD - 1)
+                tab.closeSubpath()
+                p.setPen(QtCore.Qt.NoPen)
+                p.setBrush(QtGui.QColor("#ffffff" if lit else "#aab2c2"))
+                p.drawPath(tab)
             p.end()
+
+        def near_line(self, x):
+            first, last, _t = self.span
+            return (self.frame is not None and first <= self.frame <= last
+                    and abs(x - self._x(self.frame) - 0.5) <= self.GRAB)
+
+        def _light(self, on):
+            if on != self._lit:
+                self._lit = on
+                self.update()
 
         def seg_at(self, pos):
             for s in sorted(self.cut, key=lambda s: -s.track):
@@ -1771,20 +1944,52 @@ else:
 
         def mousePressEvent(self, event):            # noqa: N802
             # armed only: nothing in Flame moves while the tip goes down
-            self._press = event.button() == QtCore.Qt.LeftButton
+            _pen("spine press", event)
             event.accept()
+            if event.button() != QtCore.Qt.LeftButton:
+                return
+            QtWidgets.QToolTip.hideText()
+            pos = event.position()
+            if self.near_line(pos.x()):
+                self._press = True    # the playhead, grabbed: no jump
+                self.update()
+            else:
+                s = self.seg_at(pos)
+                self._down = s.key if s else None
 
         def mouseMoveEvent(self, event):             # noqa: N802
             pos = event.position()
             if self._press:
                 self.win.scrub(self._frame_at(pos.x()))
-            s = self.seg_at(pos)
-            self.setToolTip(s.name if s else "")
+                return
+            near = self.near_line(pos.x())
+            self._light(near)
+            s = None if near else self.seg_at(pos)
+            if near:
+                tip = "the playhead - drag to scrub"
+            elif s is not None:
+                tip = "{0}\nclick: the playhead to its start, the Lens pinned on it".format(
+                    s.name)
+            else:
+                tip = ""
+            self.setToolTip(tip)
+
+        def leaveEvent(self, _event):                # noqa: N802
+            self._light(False)
 
         def mouseReleaseEvent(self, event):          # noqa: N802
-            if self._press and event.button() == QtCore.Qt.LeftButton:
+            _pen("spine release", event)
+            if event.button() != QtCore.Qt.LeftButton:
+                return
+            if self._press:
+                self._press = False
                 self.win.scrub(self._frame_at(event.position().x()), done=True)
-            self._press = False
+                self.update()
+                return
+            key, self._down = self._down, None
+            s = self.seg_at(event.position())
+            if key is not None and s is not None and s.key == key:
+                self.win.pick(key)    # a press that wandered off does nothing
 
     class _Window(QtWidgets.QWidget):
         """The one Lens. See the module header."""
@@ -2083,11 +2288,25 @@ else:
             self.beat(self.follower.ctx.tab, force=True)
 
         def focus(self, key):
+            """The playhead to *key*'s first frame, and *key* the subject until
+            the playhead moves on -- even where the focused track would give
+            another segment there."""
             seg = self.follower.cut.by_key.get(key)
             if seg is None:
                 return
-            self.follower.follow_playhead()
+            self.follower.reveal(key, seg.record_in)
             self._move(seg.record_in)
+
+        def pick(self, key):
+            """A segment clicked on the spine: the playhead to its first frame,
+            the window pinned on it (the Takes Lens's click, forge-takes
+            59b5b28). Unpin with the Pinned button."""
+            seg = self.follower.cut.by_key.get(key)
+            if seg is None:
+                return
+            self.follower.pin_keys([key])
+            self._said_follow()
+            self._move(seg.record_in, force=True)   # nothing read inside the click
 
         def scrub(self, frame, done=False):
             """The spine pressed and dragged: the positioner follows, on the
@@ -2103,12 +2322,12 @@ else:
                         self._move(to, now=True)
                 later(run)
 
-        def _move(self, frame, now=False):
+        def _move(self, frame, now=False, force=False):
             def go():
                 tl, seq = self.follower.tl, self.follower.tl.sequence()
                 if seq is not None:
                     tl.move_to(seq, frame, self.follower.cut.start)
-                self.beat(self.follower.ctx.tab)
+                self.beat(self.follower.ctx.tab, force=force)
             go() if now else later(go)
 
         def _toggle_pin(self):
@@ -2121,8 +2340,8 @@ else:
             self._follow_btn.setText("Pinned" if pinned else "Following")
             self._follow_btn.setToolTip(
                 "Stays on this segment - click to follow the timeline" if pinned else
-                "Follows the selection, else the segment under the playhead - "
-                "click to stay on this one")
+                "Follows a click in the timeline, else the playhead on the focused "
+                "track - click to stay on this one")
 
         def _said_subject(self, ctx):
             p = ctx.primary
@@ -2133,7 +2352,7 @@ else:
             else:
                 more = len(ctx.segments) - 1
                 word = {"selection": "selected", "playhead": "at the playhead",
-                        "pin": "pinned"}.get(ctx.source, "")
+                        "pin": "pinned", "click": "clicked"}.get(ctx.source, "")
                 said = '<b style="color:#e6e9ef;">{0}</b>{1}&nbsp;&nbsp;' \
                        '<span style="color:#8a93a4;">{2}</span>'.format(
                            _escape(p.name), " +{0}".format(more) if more > 0 else "", word)

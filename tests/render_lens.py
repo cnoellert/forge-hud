@@ -195,6 +195,7 @@ if graph_state is not None:
 # --- the window ------------------------------------------------------------------------
 
 seq._now = fakeflame.Time(86600)                   # GMM_230's first frames: V2's GMM_410
+seq.primary_track = seq.version.tracks[1]          # the focus on V2
 win = fl.open(fl.Timeline(flame))
 win.resize(400, 1200)
 pump()
@@ -258,6 +259,59 @@ win.scrub(86450, done=True)
 pump()
 check("the spine scrubs the positioner (from start_time)", seq.current_time.frame == 86450
       and win.follower.ctx.primary.key == "GMM_400")
+
+
+
+# the spine by the mouse: the line drags; a segment is clicked
+def mouse(kind, x, y, buttons):
+    from PySide6 import QtGui
+    pos = QtCore.QPointF(x, y)
+    glob = QtCore.QPointF(win.spine.mapToGlobal(pos.toPoint()))
+    ev = QtGui.QMouseEvent(kind, pos, glob, QtCore.Qt.LeftButton,
+                           buttons, QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(win.spine, ev)
+
+
+def press_release(x0, y0, x1, y1):
+    mouse(QtCore.QEvent.MouseButtonPress, x0, y0, QtCore.Qt.LeftButton)
+    pump()
+    mouse(QtCore.QEvent.MouseMove, x1, y1, QtCore.Qt.LeftButton)
+    pump()
+    mouse(QtCore.QEvent.MouseButtonRelease, x1, y1, QtCore.Qt.NoButton)
+    pump()
+
+
+sp = win.spine
+mid = lambda s_: sp._rect(s_.track, s_.record_in, s_.record_out).center()  # noqa: E731
+line = sp._x(seq.current_time.frame) + 0.5
+far = sp._x(86900)
+press_release(line + 2, sp.PAD + 2, far, sp.PAD + 2)
+check("the spine's line drags the playhead",
+      seq.current_time.frame == sp._frame_at(far) and not win.follower.pinned)
+g430 = win.follower.cut.by_key["GMM_430"]
+g400 = win.follower.cut.by_key["GMM_400"]
+before = seq.current_time.frame
+c = mid(g400)
+mouse(QtCore.QEvent.MouseButtonPress, c.x(), c.y(), QtCore.Qt.LeftButton)
+pump()
+check("a press on a segment moves nothing", seq.current_time.frame == before)
+c2 = mid(g430)
+mouse(QtCore.QEvent.MouseButtonRelease, c2.x(), c2.y(), QtCore.Qt.NoButton)
+pump()
+check("a press that wanders to another segment does nothing",
+      seq.current_time.frame == before and not win.follower.pinned)
+press_release(c2.x(), c2.y(), c2.x(), c2.y())
+check("a segment clicked on the spine: the playhead to its start, pinned on it",
+      seq.current_time.frame == g430.record_in and win.follower.pinned == ["GMM_430"]
+      and win.follower.ctx.source == "pin" and win.follower.ctx.primary.key == "GMM_430")
+win._toggle_pin()
+pump()
+g230.selected = False
+flame.timeline.current_segment = seq.seg("GMM_400")
+fl._beat("Timeline")
+pump()
+check("a plain click in the timeline (nothing selected) leads",
+      win.follower.ctx.source == "click" and win.follower.ctx.primary.key == "GMM_400")
 
 win.set_mode("wide")
 win.resize(1500, 1100)
