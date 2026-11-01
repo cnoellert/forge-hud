@@ -591,9 +591,11 @@ class Timeline(object):
         return out
 
     def move_to(self, seq, frame, start=0):
-        """The positioner on record *frame*: PyTime(n) counts from the
-        sequence's start_time, not 0 [LIVE 2027.1, 2026-10-29]."""
-        seq.current_time = self.flame.PyTime(int(frame) - int(start))
+        """The positioner on record *frame*. PyTime(n) is the sequence's
+        n-th frame counted from 1 at its start_time: PyTime(350) landed on
+        86749 with a start of 86400 [LIVE 2027.1, 2026-11-01, forge-takes
+        ca29de6] -- so frame - start + 1, not frame - start."""
+        seq.current_time = self.flame.PyTime(int(frame) - int(start) + 1)
 
 
 class Follower(object):

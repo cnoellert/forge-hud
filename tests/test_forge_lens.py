@@ -185,6 +185,11 @@ def test_move_to_counts_from_the_sequence_start():
     f, flame = follower(seq)
     f.tl.move_to(seq, 86600, start=seq.start_time.frame)
     assert seq.current_time.frame == 86600
+    # the live case: a start of 86400, PyTime(350) is 86749
+    seq.current_time = flame.PyTime(350)
+    assert seq.current_time.frame == 86749
+    f.tl.move_to(seq, 86750, start=86400)
+    assert seq.current_time.frame == 86750
 
 
 # --- cross-reading ------------------------------------------------------------------

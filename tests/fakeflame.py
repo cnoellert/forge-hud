@@ -59,7 +59,9 @@ class Sequence(object):
 
     @current_time.setter
     def current_time(self, t):
-        f = t.frame + (self.start_time.frame if t.relative else 0)
+        # PyTime(n): the n-th frame counted from 1 at start_time [LIVE 2027.1,
+        # 2026-11-01: PyTime(350) -> 86749 on a start of 86400]
+        f = (self.start_time.frame + t.frame - 1) if t.relative else t.frame
         self._now = Time(f)
 
     def seg(self, key):
