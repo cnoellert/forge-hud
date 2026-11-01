@@ -191,6 +191,57 @@ Flame's thread. A consumer meeting an older 1.x checks
   rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
   one with the new code.
 
+## The one Lens (`forge_lens.py`, 0.1.0)
+
+A second module beside the rail, for forge-hud#1: **one window that each
+distro registers *areas* into** — Takes (forge-takes), Versions and Depends
+(forge-streams), later the Cut and the Batch tab's lenses. Install it beside
+`forge_hud.py` the same way; it needs forge_hud ≥ 1.10 for its heartbeat
+(without one it still draws, and Refresh works, but it doesn't follow the
+timeline).
+
+The window owns what the areas share, once:
+
+- **The subject.** The selection, else the top *picture* segment at the
+  playhead (a gap that only carries an effect is an adjustment layer — the
+  subject only when selected or alone), the pin over both. Read on the
+  heartbeat from a handful of getters; the cut is walked only on a click, a
+  sequence change or Refresh. Every area gets it as a `Ctx`: `segments`,
+  `primary`, `source`, `over` (what is stacked over it), `visible`,
+  `settled` (unchanged two beats running), `playing`, `frame`, `tags`, and
+  the cut, keyed exactly as forge-takes' `shot_keys` / forge-streams'
+  `posting._keyed`, named by forge-takes' `segment_label` rule
+  (`GMM_430 · V2` when a name repeats).
+- **The spine.** The cut, small, one painter: take colours fill (from the
+  areas' overlays), tones never do; a preview's marks fill, outline, dash or
+  dim the rest, with a caption under it. Sized once per subject to the cut
+  plus every area's `extent`, so a preview never grows it. Dragged, it
+  scrubs the positioner (on the idle queue; nothing moves on the press).
+- **The window.** forge-streams' `LensWindow` chrome, moved here: a
+  frameless `Qt.Tool`, dragged by its header, sized by outline grips applied
+  on release, narrow or wide, each placed where it was last left; hidden
+  off its tabs and back; off the keyboard; areas stacked, each collapsed,
+  minimal or expanded, with a chip each to jump to it or bring it back.
+- **The crash rules.** No timer of its own; no event filters but the
+  host's (`on_release`, `on_double`, the pen watch feeding forge_hud's pen
+  log); verbs through `later()`; disk through `read()`, whose answer comes
+  back through a queued-signal poster (`on_main`) — no thread ever calls
+  `flame.schedule_idle_event`, which deadlocked Flame. A failing area shows
+  one line and stops nothing; re-registering an id swaps it in the live
+  window.
+
+Each area gets an `AreaHost` — `LensWindow`'s own surface, per area — so a
+drawing made for the standalone Segment Lens is hosted unchanged:
+forge-streams' `SegmentGraph(host)` draws the Depends area pixel for pixel
+as the standalone window draws it (`tests/render_lens.py` checks that, narrow
+and wide). The contract is r3 on forge-hud#1; the API is in the module
+header.
+
+Tests: `pytest tests` (no Qt needed); the window itself, offscreen under
+Flame's Python: `PYTHONPATH=../forge-streams/src
+/opt/Autodesk/python/2027.1/bin/python3 tests/render_lens.py <out>
+[<segment lens state.json>]`.
+
 ## Backlog
 
 - **Fold the rail to a tab-like strip** (Chris, 2026-10-30): beyond the

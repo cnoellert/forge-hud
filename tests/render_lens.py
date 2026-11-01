@@ -1,0 +1,318 @@
+"""The one Lens, offscreen, with real Qt -- run under Flame's Python:
+
+  PYTHONPATH=../forge-streams/src /opt/Autodesk/python/2027.1/bin/python3 \\
+      tests/render_lens.py <out dir> [<segment lens state.json>]
+
+LINKTEST2's cut (forge-takes' snapshot) is the timeline. Two demo areas --
+Takes from the snapshot, and a Versions area that cross-reads it with
+same_as() -- plus, given a Segment Lens state (forge-streams'
+seglens.snapshot, e.g. /var/tmp/forge_streams_golden/wtr090_state.json),
+forge-streams' own SegmentGraph hosted as the Depends area, unchanged. Its
+canvas is then compared pixel for pixel with the standalone Segment Lens's,
+narrow and wide. Renders go to <out dir>; nothing is written to ~/.
+"""
+
+import json
+import os
+import sys
+import types
+
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, ".."))
+sys.path.insert(0, HERE)
+
+out = sys.argv[1]
+graph_state = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else None
+os.makedirs(out, exist_ok=True)
+
+# forge_hud stands in: no heartbeat (beats are driven here), no pen log
+hud = types.ModuleType("forge_hud")
+hud.pen_note = lambda *a, **k: None
+hud.listen = hud.unlisten = lambda *a, **k: None
+sys.modules["forge_hud"] = hud
+
+import fakeflame  # noqa: E402
+
+snap = fakeflame.linktest2()
+seq = fakeflame.Sequence(snap["cut"])
+flame = fakeflame.module(seq)
+sys.modules["flame"] = flame
+
+from PySide6 import QtCore, QtWidgets  # noqa: E402
+
+app = QtWidgets.QApplication([])
+import forge_lens as fl  # noqa: E402
+
+fl.STATE_PATH = os.path.join(out, "lens_state.json")
+if os.path.exists(fl.STATE_PATH):
+    os.remove(fl.STATE_PATH)
+
+
+def pump():
+    for _ in range(6):
+        app.processEvents()
+        while flame.idle:
+            flame.idle.pop(0)()
+        app.processEvents()
+
+
+COLOURS = dict((t["take"], t["colour"] or fl.MAIN_COLOUR) for t in snap["takes"])
+failures = []
+
+
+def check(what, ok):
+    print(("ok   " if ok else "FAIL ") + what)
+    if not ok:
+        failures.append(what)
+
+
+# --- a demo Takes area, from the snapshot ---------------------------------------
+
+def sig(rows):
+    return tuple(tuple(r) for r in rows)
+
+
+def takes_build(parent, ctx):
+    lbl = QtWidgets.QLabel()
+    lbl.setTextFormat(QtCore.Qt.RichText)
+    lbl.setWordWrap(True)
+    return lbl
+
+
+def takes_refresh(widget, ctx, mode):
+    p = ctx.primary
+    seg = snap["segments"].get(p.key) if p else None
+    if seg is None:
+        widget.setText('<span style="color:#8a93a4;">No takes here.</span>')
+        return
+    lines = ['<b style="color:{0};">● {1}</b> &nbsp;<span style="color:#8a93a4;">'
+             'on now</span>'.format(COLOURS.get(seg["on"], fl.MAIN_COLOUR), seg["on"])]
+    for sw in seg["switch"]:
+        if sw["on_now"]:
+            continue
+        said = ", ".join(c["text"] for c in sw["changes"]) or "relabel"
+        lines.append('<span style="color:{0};">●</span> switch to {1} &nbsp;'
+                     '<span style="color:#8a93a4;">{2}</span>'.format(
+                         COLOURS.get(sw["take"], fl.MAIN_COLOUR), sw["take"], said))
+    widget.setText("<br>".join(lines))
+
+
+def takes_summary(ctx):
+    p = ctx.primary
+    seg = snap["segments"].get(p.key) if p else None
+    if not seg:
+        return {"html": "", "tone": "neutral"}
+    n = sum(1 for sw in seg["switch"] if not sw["on_now"] and sw["changes"])
+    return {"html": "on {0} · {1} take{2} would change it".format(seg["on"], n, "s" * (n != 1)),
+            "tone": "neutral"}
+
+
+def takes_overlay(ctx):
+    return [fl.Mark(k, COLOURS.get(s["on"], fl.MAIN_COLOUR), "fill")
+            for k, s in snap["segments"].items()]
+
+
+def takes_effects(ctx):
+    out_ = {}
+    for s in ctx.segments:
+        seg = snap["segments"].get(s.key)
+        if seg:
+            out_[s.key] = [("switch to " + seg["on"], sig(seg["signature"]))] + \
+                [(e["label"], sig(e["signature"])) for e in seg["effects_by_switch"]]
+    return out_
+
+
+fl.register_area("takes.takes", "Takes", build=takes_build, refresh=takes_refresh,
+                 summary=takes_summary, overlay=takes_overlay, effects=takes_effects,
+                 wide=True)
+
+# --- a demo Versions area: GMM_410 V2's three ways (r3's corrected table) ---------
+
+MAIN = (("Timewarp", False, "35ed1e3fcb69953c"), ("Resize", False, "b991e0c441855d87"))
+WAYS = [("v01 – v03", (("Timewarp", False, "4313aaaaaaaaaaaa"), MAIN[1])),
+        ("v04 – v08 · v10", MAIN),
+        ("v09 · v11 – v13", MAIN + (("Colour Correct", False, "d71641214d0cbb04"),))]
+
+
+def versions_build(parent, ctx):
+    w = QtWidgets.QLabel()
+    w.setTextFormat(QtCore.Qt.RichText)
+    return w
+
+
+def versions_refresh(widget, ctx, mode):
+    p = ctx.primary
+    if p is None or p.key != "GMM_410 (track 2)":
+        widget.setText('<span style="color:#8a93a4;">13 versions · 3 ways it has been</span>')
+        return
+    rows = []
+    for name, s in WAYS:
+        same = fl.same_as("streams.versions", p.key, s)
+        rows.append('<span style="color:#c9d0dc;">{0}</span>{1}'.format(
+            name, ''.join('&nbsp; <span style="color:#7a61ad;">= {0}</span>'.format(lbl)
+                          for _a, lbl in same)))
+    widget.setText("<br>".join(rows))
+
+
+fl.register_area("streams.versions", "Versions", build=versions_build,
+                 refresh=versions_refresh,
+                 summary=lambda ctx: {"html": "13 versions · 3 ways it has been",
+                                      "tone": "neutral"},
+                 effects=lambda ctx: {"GMM_410 (track 2)": [("roll back to " + n, s)
+                                                            for n, s in WAYS]},
+                 follows=("takes.takes",))
+
+# --- Depends: forge-streams' SegmentGraph, hosted unchanged ---------------------------
+
+ui_lens = ui_seglens = None
+if graph_state is not None:
+    from forge_streams import ui_lens, ui_seglens          # noqa: E402
+    from forge_streams.ui_seggraph import SegmentGraph      # noqa: E402
+
+    ui_lens.STATE_PATH = os.path.join(out, "streams_lens_state.json")
+    if os.path.exists(ui_lens.STATE_PATH):
+        os.remove(ui_lens.STATE_PATH)
+
+    def depends_build(parent, ctx):
+        host = fl.host("streams.depends")
+        host.STATE_PREFIX = "segment_"     # the standalone Segment Lens's folding
+        host.graph = SegmentGraph(host)
+        host.redraw = lambda state: host.graph.draw(ui_seglens._only(state, host.views))
+        host.reveal_card = host.graph.reveal
+        host.hover = host.graph.hover_link
+        host.redraw(graph_state)
+        return None                        # drawn through host._scroll
+
+    def depends_refresh(widget, ctx, mode):
+        fl.host("streams.depends").redraw(graph_state)
+
+    fl.register_area("streams.depends", "Depends", build=depends_build,
+                     refresh=depends_refresh,
+                     summary=lambda ctx: {"html": "v004 · roto ← plate v002", "tone": "warn"},
+                     wide=True)
+
+# --- the window ------------------------------------------------------------------------
+
+seq._now = fakeflame.Time(86600)                   # GMM_230's first frames: V2's GMM_410
+win = fl.open(fl.Timeline(flame))
+win.resize(400, 1200)
+pump()
+ctx = win.follower.ctx
+check("subject: GMM_410 · V2 at the playhead, over Gap on track 3",
+      ctx.primary is not None and ctx.primary.name == "GMM_410 · V2"
+      and [s.name for s in ctx.over] == ["Gap on track 3"])
+check("the spine holds the whole cut: 3 tracks, 86448-87167",
+      win.spine.span == (86448, 87167, 3))
+check("cross-reading: v04 – v08 · v10 = switch to Main",
+      "= switch to Main" in win.frames["streams.versions"].content.text()
+      and win.frames["streams.versions"].content.text().count("= switch to Main") == 1)
+check("summary: Takes says what it holds",
+      "would change it" in win.frames["takes.takes"]._summary.text())
+win.grab().save(os.path.join(out, "lens_narrow.png"))
+
+# a preview: Versions' v09 · v11 – v13 hovered
+fl.preview("streams.versions", [fl.Mark("GMM_410 (track 2)", COLOURS["warmer"], "fill"),
+                                 fl.Mark("GMM_410 (track 2)", None, "dim_rest")],
+           ("v09 · v11 – v13 → now: 1 change", ["GMM_410 · V2   take   warmer → Main"]))
+pump()
+h0 = win.spine.height()
+win.grab().save(os.path.join(out, "lens_narrow_preview.png"))
+check("a preview never resizes the spine", win.spine.height() == h0)
+fl.preview("streams.versions", None)
+
+# a failing area shows one line and stops nothing
+fl.register_area("broken.one", "Broken", build=lambda p, c: 1 / 0,
+                 refresh=lambda w, c, m: None)
+pump()
+check("a failed build is one guard line", win.frames["broken.one"]._guard.isVisible()
+      and "build failed (ZeroDivisionError)" in win.frames["broken.one"]._guard.text())
+fl.unregister_area("broken.one")
+
+# re-register: the callbacks swap in the live window
+fl.register_area("streams.versions", "Versions", build=versions_build,
+                 refresh=versions_refresh,
+                 summary=lambda ctx: {"html": "swapped", "tone": "info"},
+                 follows=("takes.takes",))
+pump()
+check("re-register swaps the callbacks live",
+      "swapped" in win.frames["streams.versions"]._summary.text())
+
+# the tab: off the Timeline it hides; back, it returns
+fl._beat("Batch")
+check("hidden off its tab", not win.isVisible())
+fl._beat("Timeline")
+pump()
+check("back on its tab", win.isVisible())
+
+# a click in the timeline: GMM_230 (V1) selected
+g230 = seq.seg("GMM_230")
+g230.selected = True
+flame.timeline.current_segment = g230
+fl._beat("Timeline")
+pump()
+check("a click selects the subject", win.follower.ctx.primary.key == "GMM_230")
+
+# the spine dragged: the positioner follows, the subject with it
+win.scrub(86450, done=True)
+pump()
+check("the spine scrubs the positioner (from start_time)", seq.current_time.frame == 86450
+      and win.follower.ctx.primary.key == "GMM_400")
+
+win.set_mode("wide")
+win.resize(1500, 1100)
+pump()
+win.grab().save(os.path.join(out, "lens_wide.png"))
+
+
+# --- Depends against the standalone Segment Lens, pixel for pixel ----------------------
+
+def compare(mode, width):
+    class Panel(object):
+        shown = None
+
+        def snapshot(self):
+            return graph_state
+    alone = ui_seglens.SegmentLensWindow(lambda: Panel())
+    alone.set_mode(mode)
+    alone.resize(width, 1200)
+    alone.show()
+    alone.refresh(graph_state)
+    pump()
+    win.set_mode(mode)
+    frame = win.frames["streams.depends"]
+    win.resize(width, 1600)
+    pump()
+    mine = frame.content
+    theirs = alone._scroll.widget()
+    # the same width for both canvases: move the standalone window by the gap
+    for _ in range(3):
+        gap = mine.width() - theirs.width()
+        if not gap:
+            break
+        alone.resize(alone.width() + gap, alone.height())
+        alone.refresh(graph_state)
+        pump()
+        theirs = alone._scroll.widget()
+    a, b = mine.grab().toImage(), theirs.grab().toImage()
+    a.save(os.path.join(out, "depends_{0}_hosted.png".format(mode)))
+    b.save(os.path.join(out, "depends_{0}_standalone.png".format(mode)))
+    # the standalone canvas is stretched to its viewport, the rest of it
+    # empty: compare what the hosted one draws, then that the rest is empty
+    drawn = b.copy(0, 0, a.width(), a.height())
+    empty = all((b.pixel(x, y) >> 24) == 0 for y in range(a.height(), b.height(), 3)
+                for x in range(0, b.width(), 3))
+    check("Depends {0}: canvas {1}x{2} pixel-identical to the standalone's ({3}x{4}, "
+          "empty below)".format(mode, a.width(), a.height(), b.width(), b.height()),
+          a.width() == b.width() and a == drawn and empty)
+    alone.close()
+
+
+if graph_state is not None:
+    win.frames["streams.depends"].set_fold("expanded")
+    compare("narrow", 400)
+    compare("wide", 1500)
+
+print("rendered to", out, "-", "all checks passed" if not failures else
+      "{0} FAILED".format(len(failures)))
+sys.exit(1 if failures else 0)
