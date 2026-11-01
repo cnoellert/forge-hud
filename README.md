@@ -76,6 +76,8 @@ forge_hud.enabled("wireless")  # -> bool
 forge_hud.ensure()             # show the dock if any section is enabled
 forge_hud.update()             # refresh row labels (action checkpoints)
 forge_hud.reset_position()     # park the rail back at the default corner
+forge_hud.listen("lens", fn)   # 1.10.0+: fn(tab) on every heartbeat, rail or not
+forge_hud.unlisten("lens")     # remove it; the heartbeat stops when unwanted
 ```
 
 `register()` is safe at import time (no Qt is touched) and replaces by id,
@@ -98,6 +100,16 @@ the one-timer rule: no timer of its own, and it must be as cheap as a key,
 redrawing only when what it watches moved. Fall back without it on
 `TypeError`.
 
+`listen(cid, fn)` (**1.10.0+**) adds a heartbeat client that is *not* a
+section: it has no row and no enabled state, and `fn(tab)` is called on
+every heartbeat with the current Flame tab, whether or not any rail row is
+enabled. It exists for the one Lens (forge-hud#1), a window that must
+follow the timeline with every row hidden. Same rules as `on_tick`: as
+cheap as a key, no I/O, guarded. It replaces by id, is safe at import time
+(the heartbeat starts on the next idle event), and must be called from
+Flame's thread. A consumer meeting an older 1.x checks
+`hasattr(forge_hud, "listen")`.
+
 ## Behaviour
 
 - **Tab-aware.** Each section declares the Flame tabs it belongs to
@@ -110,9 +122,10 @@ redrawing only when what it watches moved. Fall back without it on
   watcher is a 600 ms heartbeat polling `flame.get_current_tab()` (a
   trivial getter). This is the **one sanctioned `QTimer`** in the FORGE
   HUD family: the crash-catalog hazard is timers firing into closing
-  dialogs, and this one is parented to the session-lived dock, does a
-  guarded getter-and-compare per tick, stops itself when orphaned, and is
-  stopped before a reload swaps the dock. If it ever dies, the action
+  dialogs, and this one is parented to the session-lived `QApplication`
+  (the dock, before 1.10), does a guarded getter-and-compare per tick,
+  stops itself when orphaned, and is stopped before a reload swaps the
+  module. If it ever dies, the action
   checkpoints still re-apply the context — lazy hiding, never breakage.
 - **Drag** anywhere to move the dock; the OS-native `startSystemMove()`
   does the work (reliable for frameless windows on every platform), with
@@ -168,6 +181,15 @@ redrawing only when what it watches moved. Fall back without it on
   back onto its screen when the window system has parked it part off one
   with no move of ours (seen on 2027.1: at y −20 on a saved y 0, its top
   clipped).
+- **The heartbeat outlives the rail (1.10.0).** Up to 1.9 the heartbeat
+  lived on the dock, and the dock is only built when a rail row is
+  enabled, so a window following the timeline (the one Lens) got no ticks
+  with every row hidden. It now belongs to the session: parented to the
+  `QApplication`, its handle anchored on `builtins`, running while the
+  dock or any `listen()` client exists and stopping itself when neither
+  does. Still the one sanctioned `QTimer`, and nothing changes for the
+  rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
+  one with the new code.
 
 ## Backlog
 

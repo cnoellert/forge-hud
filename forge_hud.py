@@ -26,6 +26,8 @@
 #   forge_hud.toggle("wireless")    # menu action; returns the new state
 #   forge_hud.ensure()              # show the dock if any section is enabled
 #   forge_hud.update()              # refresh row labels (action checkpoints)
+#   forge_hud.listen("lens", fn)    # 1.10+: fn(tab) on every heartbeat, rail
+#   forge_hud.unlisten("lens")      #   or no rail (a window that isn't a row)
 #
 # Tab awareness: the dock hides itself when the current Flame tab matches no
 # enabled section's `tabs` (a Batch HUD has no business floating over the
@@ -33,13 +35,16 @@
 # verified live on 2026.2.2 with counters on focusChanged /
 # focusObjectChanged / focusWindowChanged -- its custom-drawn tab bar emits
 # NO Qt focus traffic when the user switches tabs. The only mechanism left
-# is a slow heartbeat: a 600 ms QTimer on the dock reading
-# flame.get_current_tab() (a trivial getter) and re-applying the context on
-# change. This is the ONE sanctioned QTimer in the FORGE HUD family -- the
-# crash-#16 hazard is timers firing into closing dialogs, and this one is
-# parented to a session-lived singleton, does nothing but a guarded getter
-# + compare, stops itself if the anchor no longer points at its dock, and
-# is stopped explicitly before a reload swaps the dock.
+# is a slow heartbeat: a 600 ms QTimer reading flame.get_current_tab() (a
+# trivial getter) and re-applying the context on change. This is the ONE
+# sanctioned QTimer in the FORGE HUD family -- the crash-#16 hazard is
+# timers firing into closing dialogs, and this one is parented to the
+# session-lived QApplication, does nothing but a guarded getter + compare,
+# stops itself if the anchor no longer points at it, and is stopped
+# explicitly before a reload swaps the module. Since 1.10 it belongs to the
+# session, not the dock: it runs while the dock or any listen() client
+# exists, so the one Lens follows the timeline with every rail row hidden
+# (forge-hud#1). A heartbeat client is not a section: it has no row.
 #
 # Row anatomy is owned by the LIBRARY so every section reads the same way:
 #
@@ -117,7 +122,7 @@
 import json
 import os
 
-__version__ = "1.9.1"
+__version__ = "1.10.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -523,7 +528,7 @@ def ensure():
         except Exception:
             return                # headless / no QApplication
         st["dock"] = dock
-        _start_heartbeat(dock)
+        _ensure_heartbeat()
     try:
         dock.rebuild()
     except Exception:
@@ -544,6 +549,32 @@ def update():
             dock.refresh_labels()
     except Exception:
         pass
+
+
+def listen(cid, fn):
+    """Add or replace a heartbeat client (1.10.0+): `fn(tab)` is called on
+    every heartbeat with the current Flame tab, rail or no rail -- for a
+    window that is not a rail section (forge_lens, the one Lens) and must
+    follow the timeline even with every row hidden. Replaces by id, so a
+    reloaded client re-listens cleanly. `fn` keeps the heartbeat's rules:
+    as cheap as a key, no I/O, no redraw unless what it watches moved, and
+    never allowed to raise into the heartbeat (it is guarded anyway).
+    Call it from Flame's thread. Safe at import time: the heartbeat starts
+    on the next idle event, not inside the call."""
+    _anchor().setdefault("clients", {})[cid] = fn
+    if _anchor().get("heartbeat") is not None:
+        return
+    try:
+        import flame              # noqa: PLC0415
+        flame.schedule_idle_event(_ensure_heartbeat)
+    except Exception:
+        _ensure_heartbeat()       # outside Flame: start now, or no-op headless
+
+
+def unlisten(cid):
+    """Remove a heartbeat client. The heartbeat stops on its next tick if
+    neither the dock nor any client wants it."""
+    _anchor().setdefault("clients", {}).pop(cid, None)
 
 
 # --- tab context ------------------------------------------------------------
@@ -635,43 +666,97 @@ def _ticks():
                 pass
 
 
-def _start_heartbeat(dock):
-    """The dock's 600 ms tab watcher -- see the module header for why this
-    is the one sanctioned QTimer. Parented to the dock (dies with it),
-    stops itself if the anchor no longer points at its dock."""
+def _client_ticks(tab):
+    """Every heartbeat client, each guarded -- see listen()."""
+    for fn in list(_anchor().setdefault("clients", {}).values()):
+        try:
+            fn(tab)
+        except Exception:
+            pass
+
+
+def _dock_beat(dock, tab):
+    """The rail's share of a heartbeat: follow the tab, redraw on a moved
+    key, keep the dock on a screen."""
+    if tab != dock._last_tab:
+        _apply_context(force=True)
+    elif dock.isVisible() and _keys_moved(dock):
+        dock.refresh_labels()
+    # a display that shrank (or vanished) under the dock leaves a frameless
+    # window stranded off-screen with no title bar to drag it back --
+    # re-clamp when the layout changes
+    if _screen_rects() != getattr(dock, "_screens", None):
+        _place(dock)
+    elif dock.isVisible() and not _on_screen(dock):
+        # the window system can park a shown dock part off its screen with
+        # no move we made (seen on 2027.1: y -20 on a saved y 0, its top
+        # clipped) -- walk it back
+        _place(dock, dock.x(), dock.y())
+
+
+def _heartbeat_wanted():
+    st = _anchor()
+    return st.get("dock") is not None or bool(st.get("clients"))
+
+
+def _stop_heartbeat():
+    st = _anchor()
+    timer = st.get("heartbeat")
+    st["heartbeat"] = None
+    if timer is not None:
+        try:
+            timer.stop()
+            timer.deleteLater()
+        except Exception:
+            pass
+
+
+def _ensure_heartbeat():
+    """Start the 600 ms heartbeat if anything wants it and it isn't running
+    -- see the module header for why this is the one sanctioned QTimer.
+
+    Since 1.10 it belongs to the session, not to the dock: it is parented
+    to the QApplication and its handle is anchored on `builtins`, so it
+    runs while the dock OR any heartbeat client exists (the one Lens can be
+    open with every rail row hidden). It stops itself when the anchor no
+    longer points at it (a reload started a new one) or when nothing wants
+    it any more."""
+    st = _anchor()
+    if st.get("heartbeat") is not None or not _heartbeat_wanted():
+        return
     try:
-        QtCore, _g, _w = _qt()
-        timer = QtCore.QTimer(dock)
+        QtCore, _g, QtWidgets = _qt()
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return                # headless
+        timer = QtCore.QTimer(app)
         timer.setInterval(600)
 
         def tick():
             try:
-                if _anchor().get("dock") is not dock:
+                if _anchor().get("heartbeat") is not timer:
                     timer.stop()
                     return
-                if _current_tab() != dock._last_tab:
-                    _apply_context(force=True)
-                elif dock.isVisible() and _keys_moved(dock):
-                    dock.refresh_labels()
+                if not _heartbeat_wanted():
+                    _stop_heartbeat()
+                    return
+                tab = _current_tab()
+                dock = _anchor().get("dock")
+                if dock is not None:
+                    try:
+                        _dock_beat(dock, tab)
+                    except Exception:
+                        pass      # the rail never starves the clients
                 _ticks()
-                # a display that shrank (or vanished) under the dock leaves
-                # a frameless window stranded off-screen with no title bar
-                # to drag it back -- re-clamp when the layout changes
-                if _screen_rects() != getattr(dock, "_screens", None):
-                    _place(dock)
-                elif dock.isVisible() and not _on_screen(dock):
-                    # the window system can park a shown dock part off its
-                    # screen with no move we made (seen on 2027.1: y -20 on
-                    # a saved y 0, its top clipped) -- walk it back
-                    _place(dock, dock.x(), dock.y())
+                _client_ticks(tab)
             except Exception:
                 pass              # a HUD must never break anything
 
         timer.timeout.connect(tick)
+        st["heartbeat"] = timer
         timer.start()
-        dock._tab_timer = timer
     except Exception:
-        pass
+        st["heartbeat"] = None
 
 
 # --- the dock ---------------------------------------------------------------
@@ -1015,9 +1100,10 @@ def _adopt_previous():
     except Exception:
         pass
     try:
-        st["dock"]._tab_timer.stop()
+        st["dock"]._tab_timer.stop()   # <= 1.9: the heartbeat lived on the dock
     except Exception:
         pass
+    _stop_heartbeat()                  # 1.10+: its tick is the old module's
     old = st.get("dock")
     if old is not None:
         try:
@@ -1029,11 +1115,13 @@ def _adopt_previous():
     # rebuild unconditionally: the dock may have been hidden only by tab
     # context (not by the user), and ensure() + _apply_context() restore
     # the correct state either way -- created, watching focus, shown or
-    # hidden for the current tab
+    # hidden for the current tab -- and restart the heartbeat with the new
+    # code even when there is no dock, if a client is listening
     try:
         ensure()
     except Exception:
         pass
+    _ensure_heartbeat()
 
 
 # --- cold-start boot --------------------------------------------------------
@@ -1042,14 +1130,16 @@ def _adopt_previous():
 # (batch_setup_loaded is disk loads only), so without this the dock waited
 # for the first right-click or takes action. One idle event on the main
 # thread: ensure() builds the dock (hidden or shown per the current tab)
-# and starts the heartbeat, which handles everything from then on.
-# Idempotent; a no-op when nothing is enabled or outside Flame.
+# and starts the heartbeat, which handles everything from then on. The
+# heartbeat is started for listening clients too, rail or no rail.
+# Idempotent; a no-op when nothing is enabled or listening, or outside Flame.
 
 def _startup_boot():
     try:
         ensure()
     except Exception:
         pass
+    _ensure_heartbeat()
 
 
 def _schedule_startup_boot():
