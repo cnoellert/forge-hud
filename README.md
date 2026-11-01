@@ -191,7 +191,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
   one with the new code.
 
-## The one Lens (`forge_lens.py`, 0.2.0)
+## The one Lens (`forge_lens.py`, 0.2.1)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -204,9 +204,10 @@ The window owns what the areas share, once:
 
 - **The subject.** The last thing the artist did wins: the pin; a
   selection; a segment clicked in the timeline, until the playhead moves;
-  else the playhead's segment on the **focused track** (`primary_track`),
-  else the top *picture* there (a gap that only carries an effect is an
-  adjustment layer — the subject only when focused, selected or alone).
+  else the playhead's top *picture* from the **focused track**
+  (`primary_track`) down, tracks above ignored, as Flame's player sees it (a
+  gap that only carries an effect is an adjustment layer — the subject only
+  when selected or alone). Nothing at or below the focus is nothing.
   Read on the heartbeat from a handful of getters; the cut is walked only on
   a click, a sequence change, a focus on another version, or Refresh. Every area gets it as a `Ctx`: `segments`,
   `primary`, `source`, `over` (what is stacked over it), `visible`,

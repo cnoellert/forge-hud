@@ -12,8 +12,8 @@
 #   * the SUBJECT -- the sequence and its segment(s), read on forge_hud's
 #     heartbeat and handed to every area as a context. The last thing the
 #     artist did wins: the pin; a selection; a segment clicked in the
-#     timeline, until the playhead moves; else the playhead's segment on the
-#     FOCUSED track (seq.primary_track), else the top picture there. Areas
+#     timeline, until the playhead moves; else the playhead's top picture
+#     from the FOCUSED track (seq.primary_track) down, as Flame sees it. Areas
 #     never read the timeline to find out where they are;
 #   * the SPINE -- the cut, drawn small, at the top. One painter. Areas
 #     contribute overlays and previews (marks) to it, never a cut of their
@@ -80,7 +80,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -471,12 +471,14 @@ class Cut(object):
         return sorted((s for s in self.segs if s.record_in <= frame <= s.record_out),
                       key=lambda s: -s.track)
 
-    def top_picture(self, frame):
+    def top_picture(self, frame, below=None):
         """The top PICTURE segment at *frame*: a gap that only carries an
         effect works like an adjustment layer -- it is the answer only when
         nothing else is there [LIVE 2027.1, 2026-11-01: LINKTEST2's track 3
-        Gap Timeline FX over the whole cut; forge-hud#1]."""
-        here = self.at(frame)
+        Gap Timeline FX over the whole cut; forge-hud#1]. *below*: only
+        tracks at or below that one, as Flame's player sees from the
+        focused track down."""
+        here = [s for s in self.at(frame) if below is None or s.track <= below]
         for s in here:
             if s.kind == "picture":
                 return s
@@ -488,15 +490,17 @@ class Cut(object):
                     None)
 
     def under_playhead(self, frame, focus=None):
-        """The subject the playhead gives: the picture on the focused track
-        at *frame* -- the artist's focus, not the top of the stack [Chris,
-        2026-11-01: "the playhead can be over something, a second layer, and
-        be reading that when the focus is actually on the track beneath"] --
-        else, where that track has nothing there, the top picture."""
+        """The subject the playhead gives, as Flame sees it: from the
+        focused track DOWN -- the top picture at or below it at *frame*,
+        tracks above ignored [Chris, 2026-11-01: "the playhead can be over
+        something, a second layer, and be reading that when the focus is
+        actually on the track beneath"; and, of an empty focused track,
+        "it doesn't look down ... Contrary to how flame works itself"].
+        Nothing at or below the focus is nothing, as Flame shows black
+        there. No focus known: the top picture."""
         if frame is None:
             return None
-        hit = self.on_track(focus, frame) if focus is not None else None
-        return hit or self.top_picture(frame)
+        return self.top_picture(frame, below=focus)
 
     def over(self, seg, frame):
         """What is stacked over *seg* at *frame* (else its first frame), top
@@ -603,7 +607,8 @@ class Timeline(object):
         """The focused track -- ``seq.primary_track``, the patch the artist
         sets -- as (index in *cut*'s version, track). Index None: no focus,
         or a track of another version than the one walked (walk again).
-        Cheap: one getter and a few comparisons; PyTrack == holds across
+        Flame's player shows this track and those beneath it. Cheap: one
+        getter and a few comparisons; PyTrack == holds across
         reads [LIVE 2027.1, 2026-11-01: ~1 us on TST_publish's 5 tracks]."""
         try:
             track = _v(seq.primary_track)
@@ -669,8 +674,8 @@ class Follower(object):
     - a selection, while there is one;
     - a segment clicked in the timeline (source "click"), until the
       playhead next moves -- a plain click selects nothing in Flame;
-    - else the playhead: the picture on the focused track at its frame,
-      else the top picture (``Cut.under_playhead``).
+    - else the playhead: the top picture at its frame from the focused
+      track down, as Flame's player sees it (``Cut.under_playhead``).
 
     Using the spine, or focus(), follows the playhead until the next click
     in the timeline. tick() returns (ctx, moved, settled_now, frame_moved)."""
@@ -790,7 +795,7 @@ class Follower(object):
                   segments=tuple(segs), primary=primary, source=source,
                   pinned=bool(self.pinned), playing=playing, frame=frame,
                   over=tuple(cut.over(primary, frame)) if primary else (),
-                  visible=cut.top_picture(frame) if frame is not None else None,
+                  visible=cut.under_playhead(frame, focus),
                   shots=cut.by_key, cut=tuple(cut.segs))
         subject = ctx.subject()
         moved = subject != self._last or first

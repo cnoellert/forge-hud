@@ -124,17 +124,35 @@ def test_the_playhead_reads_the_focused_track_not_the_top_one():
     seq._now = fakeflame.Time(86600)
     ctx, moved, _s, _f = f.tick("Timeline")
     assert ctx.source == "playhead" and ctx.primary.key == "GMM_230"
-    assert ctx.visible.key == "GMM_410 (track 2)"          # what the viewer shows
+    assert ctx.visible.key == "GMM_230"                    # the player, from V1 down
     assert [s.key for s in ctx.over] == ["gap on track 3 at 86448", "GMM_410 (track 2)"]
     # the focus up a track: the subject moves, with no walk of the cut
     focus_on(seq, 1)
     ctx, moved, _s, _f = f.tick("Timeline")
     assert moved and ctx.primary.key == "GMM_410 (track 2)" and len(walks) == 1
     assert f.focus_track == 1
-    # a focused track with nothing at the frame: the top picture there
+    assert ctx.visible.key == "GMM_410 (track 2)"
+    # a focused track empty at the frame looks DOWN, never up [Chris, live]
     seq._now = fakeflame.Time(86450)                        # GMM_400, V1 only
     ctx, moved, _s, _f = f.tick("Timeline")
     assert ctx.primary.key == "GMM_400"
+    focus_on(seq, 2)                                         # the FX gap's track
+    seq._now = fakeflame.Time(86600)
+    ctx, _m, _s, _f = f.tick("Timeline")
+    assert ctx.primary.key == "GMM_410 (track 2)"            # a picture beneath it
+
+
+def test_an_empty_focus_looks_down_not_up():
+    """TST_publish, 86894 [LIVE 2027.1, 2026-11-01]: the P on track 1 (L02),
+    empty there; L01 on track 0 beneath, L03 on track 2 above. The subject
+    is L01. With nothing at or below, nothing -- Flame shows black."""
+    cut = fl.Cut([fl.Seg("TST_040_L01", "TST_040_L01", 0, 86860, 86920, None, "picture"),
+                  fl.Seg("TST_040_L03", "TST_040_L03", 2, 86880, 86900, None, "picture"),
+                  fl.Seg("TST_050_L03", "TST_050_L03", 2, 86921, 86940, None, "picture")])
+    assert cut.under_playhead(86894, 1).key == "TST_040_L01"
+    assert cut.under_playhead(86894, 2).key == "TST_040_L03"
+    assert cut.under_playhead(86930, 1) is None
+    assert cut.under_playhead(86930, None).key == "TST_050_L03"
 
 
 @needs_linktest2
