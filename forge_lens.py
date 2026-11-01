@@ -80,7 +80,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -799,7 +799,12 @@ class Follower(object):
                   shots=cut.by_key, cut=tuple(cut.segs))
         subject = ctx.subject()
         moved = subject != self._last or first
-        if moved:
+        if moved or playing:
+            # settled: the same subject AND a still playhead -- a drag or play
+            # inside one segment must not settle it, or the flip comes while
+            # the areas that wait for a still playhead won't read, and none
+            # comes when it stops [LIVE 2027.1, 2026-11-01: Depends stuck on
+            # "Reading..." after a positioner drag across TST_040]
             self._same = 0
         else:
             self._same += 1

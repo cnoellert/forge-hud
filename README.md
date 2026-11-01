@@ -191,7 +191,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
   one with the new code.
 
-## The one Lens (`forge_lens.py`, 0.2.1)
+## The one Lens (`forge_lens.py`, 0.2.2)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -211,7 +211,7 @@ The window owns what the areas share, once:
   Read on the heartbeat from a handful of getters; the cut is walked only on
   a click, a sequence change, a focus on another version, or Refresh. Every area gets it as a `Ctx`: `segments`,
   `primary`, `source`, `over` (what is stacked over it), `visible`,
-  `settled` (unchanged two beats running), `playing`, `frame`, `tags`, and
+  `settled` (same subject, playhead still, two beats running), `playing`, `frame`, `tags`, and
   the cut, keyed exactly as forge-takes' `shot_keys` / forge-streams'
   `posting._keyed`, named by forge-takes' `segment_label` rule
   (`GMM_430 · V2` when a name repeats).

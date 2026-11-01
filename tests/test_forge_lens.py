@@ -282,6 +282,26 @@ def test_the_same_segment_on_another_version_moves_the_subject():
 
 
 @needs_linktest2
+def test_settled_waits_for_the_playhead_to_stop_and_flips_once_then():
+    """A drag or play inside one segment never settles; when it stops,
+    settled flips exactly once, two still beats later."""
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    f, _ = follower(seq)
+    seq._now = fakeflame.Time(86450)
+    f.tick("Timeline")
+    flips = []
+    for fr in range(86452, 86470, 3):                       # playing in GMM_400
+        seq._now = fakeflame.Time(fr)
+        ctx, moved, settled, _f = f.tick("Timeline")
+        assert not moved and ctx.playing and not ctx.settled
+        flips.append(settled)
+    for _ in range(4):                                       # stopped
+        ctx, moved, settled, _f = f.tick("Timeline")
+        flips.append(settled)
+    assert ctx.settled and not ctx.playing and flips.count(True) == 1
+
+
+@needs_linktest2
 def test_playback_inside_a_segment_moves_only_the_frame():
     seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
     f, _ = follower(seq)
