@@ -87,7 +87,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -1263,6 +1263,40 @@ def _drop(widget):
     widget.deleteLater()
 
 
+
+def _onto_its_screen(widget):
+    """Tell *widget*'s window the screen it is really on. Moved by our own
+    header drag onto a second monitor, the Lens kept its first screen in
+    Flame on macOS, and its menus opened clamped to that one [LIVE 2027.1,
+    2026-11-01, Chris: "I moved the lens to a separate window, but the menu
+    drew on the other main flame window"]. Plain Qt follows the move
+    (offscreen, two screens); this makes sure. A screen of the same virtual
+    desktop only repoints the window: nothing is recreated."""
+    try:
+        handle = widget.windowHandle()
+        if handle is None:
+            return
+        here = QtGui.QGuiApplication.screenAt(widget.frameGeometry().center())
+        if here is not None and (handle.screen() is None
+                                 or handle.screen().name() != here.name()):
+            handle.setScreen(here)
+    except Exception:
+        pass
+
+
+def _menu_under(button, menu):
+    """*menu* dropped from *button*, on the button's own screen -- the screen
+    under the point, not whatever screen the menu's window was made on."""
+    pos = button.mapToGlobal(QtCore.QPoint(0, button.height()))
+    try:
+        here = QtGui.QGuiApplication.screenAt(button.mapToGlobal(button.rect().center()))
+        if here is not None:
+            menu.setScreen(here)
+    except Exception:
+        pass
+    menu.popup(pos)
+
+
 def _label(text, name="dim", wrap=False):
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName(name)
@@ -1603,6 +1637,7 @@ else:
                     win.mapToGlobal(QtCore.QPoint(0, 0)).y():
                 y = top.y() - self.GAP - height
             self.setGeometry(x, y, width, height)
+            _onto_its_screen(self)
 
     class _WidgetPopout(_ListPopout):
         """popout(): an area's own widget, in the same frame."""
@@ -1806,14 +1841,19 @@ else:
             btn.setStyleSheet(BAR_BTN + " QPushButton { padding: 2px 8px; font-size: 11px; }")
             menu = QtWidgets.QMenu(btn)
 
-            def fill():
+            def show():
+                # not setMenu: QPushButton's own drop keeps the screen the
+                # menu was first made on (see _onto_its_screen)
                 menu.clear()
                 try:
                     menu_fn(menu, self.win.follower.ctx)
                 except Exception as exc:
                     _guard_line(self.area_id, "tool", exc)
-            menu.aboutToShow.connect(fill)
-            btn.setMenu(menu)
+                    return
+                if menu.actions():
+                    _menu_under(btn, menu)
+            btn.setText(text + "  \u25be")
+            btn.clicked.connect(lambda _c=False: show())
             btn._tone_fn = tool[2] if len(tool) > 2 else None
             return btn
 
@@ -2548,6 +2588,7 @@ else:
 
         def showEvent(self, event):                  # noqa: N802
             QtWidgets.QWidget.showEvent(self, event)
+            _onto_its_screen(self)
             handle = self.windowHandle()
             if handle is not None and handle is not self._pen_window:
                 handle.installEventFilter(self._pen_watch)
@@ -2618,6 +2659,8 @@ else:
 
         def moveEvent(self, event):                  # noqa: N802
             QtWidgets.QWidget.moveEvent(self, event)
+            if self.isVisible():
+                _onto_its_screen(self)               # its menus open where it is
             if self.isVisible() and not self._switching:
                 self.remember()                      # a system move sends no release
             self.place_popout()
