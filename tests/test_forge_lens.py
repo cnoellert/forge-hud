@@ -400,3 +400,42 @@ def test_register_replaces_by_id_without_qt():
     fl.register_area("a.one", "Uno", build=lambda p, c: None, refresh=lambda w, c, m: None)
     assert fl._anchor()["order"] == ["a.one"]
     assert fl._anchor()["areas"]["a.one"]["title"] == "Uno"
+
+
+# --- the family's opener ----------------------------------------------------------------
+
+def test_flame_main_menu_offers_one_lens_on_the_idle_queue():
+    flame = fakeflame.module(None)
+    flame.get_current_tab = lambda: "Timeline"
+    sys.modules["flame"] = flame
+    assert fl.opener_installed() is True
+    groups = fl.get_main_menu_custom_ui_actions()
+    assert [g["name"] for g in groups] == ["FORGE"] and groups[0]["hierarchy"] == []
+    act = groups[0]["actions"][0]
+    assert act["name"] == "One Lens…"
+    assert act["isEnabled"]([]) is True
+    flame.get_current_tab = lambda: "Batch"
+    assert act["isEnabled"]([]) is False                  # greyed off its tabs
+    opened = []
+    real = fl.open
+    fl.open = lambda *a: opened.append(1)
+    try:
+        act["execute"]([])
+        assert opened == [] and len(flame.idle) == 1      # never inside the click
+        flame.idle.pop()()
+        assert opened == [1]
+    finally:
+        fl.open = real
+
+
+def test_the_rail_finds_the_lens_and_defers_its_verb():
+    import forge_hud
+    assert forge_hud.__version__ == "1.11.0"
+    assert forge_hud._lens() is fl
+    flame = fakeflame.module(None)
+    sys.modules["flame"] = flame
+    ran = []
+    forge_hud._on_idle(lambda: ran.append(1))
+    assert ran == [] and len(flame.idle) == 1
+    flame.idle.pop()()
+    assert ran == [1]

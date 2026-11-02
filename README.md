@@ -190,15 +190,23 @@ Flame's thread. A consumer meeting an older 1.x checks
   does. Still the one sanctioned `QTimer`, and nothing changes for the
   rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
   one with the new code.
+- **One Lens… on every row's menu (1.11.0).** When `forge_lens` is
+  installed beside it, the footer every section's popup shares offers
+  *One Lens…* (or *Close the Lens* while it's open), done on the idle
+  queue. With forge_lens's own *FORGE › One Lens…* on Flame's main menu,
+  it is the family's opener; a distro's own entry steps aside when
+  `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.3.0)
+## The one Lens (`forge_lens.py`, 0.3.1)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
 (forge-streams), later the Cut and the Batch tab's lenses. Install it beside
 `forge_hud.py` the same way; it needs forge_hud ≥ 1.10 for its heartbeat
 (without one it still draws, and Refresh works, but it doesn't follow the
-timeline).
+timeline). Open it from **FORGE › One Lens…** on Flame's main menu (live on
+the Lens's tabs) or **One Lens…** at the foot of any rail row's menu
+(forge_hud ≥ 1.11).
 
 The window owns what the areas share, once:
 

@@ -122,7 +122,7 @@
 import json
 import os
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_hud.json")
 
@@ -569,6 +569,29 @@ def listen(cid, fn):
         flame.schedule_idle_event(_ensure_heartbeat)
     except Exception:
         _ensure_heartbeat()       # outside Flame: start now, or no-op headless
+
+
+def _lens():
+    """forge_lens (the one Lens) when it's installed beside this module,
+    else None -- looked up when a menu opens, never at import."""
+    import sys                    # noqa: PLC0415
+    mod = sys.modules.get("forge_lens")
+    if mod is None:
+        try:
+            import forge_lens as mod  # noqa: PLC0415
+        except Exception:
+            return None
+    return mod if hasattr(mod, "open") and hasattr(mod, "is_open") else None
+
+
+def _on_idle(fn):
+    """*fn* on Flame's idle queue -- never inside the menu's click. From
+    Flame's thread only (a menu's action is)."""
+    try:
+        import flame              # noqa: PLC0415
+        flame.schedule_idle_event(fn)
+    except Exception:
+        fn()                      # outside Flame
 
 
 def unlisten(cid):
@@ -1067,8 +1090,18 @@ def _make_dock():
                 import traceback
                 traceback.print_exc()
             popup.addSeparator()
-            # every section's popup carries the same footer: park the rail
-            # back at the default corner, or fold this section away
+            # every section's popup carries the same footer: the one Lens
+            # (1.11, the family's opener with forge_lens's FORGE menu), park
+            # the rail back at the default corner, or fold this section away
+            lens = _lens()
+            if lens is not None:
+                try:
+                    shown = bool(lens.is_open())
+                except Exception:
+                    shown = False
+                lens_act = popup.addAction("Close the Lens" if shown else "One Lens…")
+                lens_act.triggered.connect(
+                    lambda _c=False, f=(lens.close if shown else lens.open): _on_idle(f))
             reset_act = popup.addAction("Reset HUD position")
             reset_act.triggered.connect(lambda _c=False: reset_position())
             hide_act = popup.addAction("Hide {0} HUD".format(sec["title"]))

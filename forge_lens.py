@@ -46,6 +46,8 @@
 #       follows=(),              # area ids whose update() refreshes this one
 #       wide=False)              # may this area draw wide
 #   forge_lens.open() / toggle() / close() / is_open()
+#   forge_lens.opener_installed()  # True: FORGE > One Lens… and the rail's
+#                                  # One Lens… open it -- drop your own entry
 #   forge_lens.focus(key)        # the playhead to key, key the subject till it moves
 #   forge_lens.scrub(frame)      # the playhead, as the spine's drag moves it
 #   forge_lens.segment(key)      # the live PySegment from the last walk, or None
@@ -85,7 +87,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -1045,6 +1047,38 @@ def toggle():
         close()
         return None
     return open()
+
+
+# --- the family's opener ------------------------------------------------------
+
+def opener_installed():
+    """True: the Lens is offered by the family -- FORGE > One Lens… on
+    Flame's main menu (below) and One Lens… at the foot of every rail menu
+    (forge_hud >= 1.11). A distro's own entry steps aside when this says so
+    (read it through getattr: an older forge_lens hasn't it)."""
+    return True
+
+
+def _on_lens_tab(_selection=None):
+    """The entry is live on a tab the Lens shows on. Fails open."""
+    try:
+        import flame              # noqa: PLC0415
+        return str(flame.get_current_tab()) in _tabs()
+    except Exception:
+        return True
+
+
+def _open_from_menu(_selection=None):
+    later(open)                   # never inside the menu's click
+
+
+def get_main_menu_custom_ui_actions():
+    """Flame's hook: FORGE > One Lens… -- there whether the rail is or not.
+    Flame aggregates groups across hook files (forge-flame-kb D14), so FORGE
+    is shared with the distros' own submenus."""
+    return [{"name": "FORGE", "hierarchy": [], "actions": [
+        {"name": "One Lens…", "order": 1, "execute": _open_from_menu,
+         "isEnabled": _on_lens_tab}]}]
 
 
 def _beat(tab):
