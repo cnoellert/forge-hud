@@ -341,6 +341,55 @@ check("ctx.asked says why: " + ", ".join(want),
 fl.unregister_area("probe.asked")
 pump()
 
+# band marks: a row per take over the tracks, the spine grown by the rows
+sp = win.spine
+h_before = sp.height()
+BANDS = [fl.Mark("GMM_400", COLOURS["warmer"], "band", 0),
+         fl.Mark("GMM_230", COLOURS["warmer"], "band", 0),
+         fl.Mark("GMM_430", "#b0743a", "band", 1)]
+fl.register_area("probe.bands", "Bands", build=lambda p, c: QtWidgets.QLabel("b"),
+                 refresh=lambda w, c, m: None, overlay=lambda c: list(BANDS))
+pump()
+grown = sp.height() - h_before
+img = sp.grab().toImage()
+g400 = win.follower.cut.by_key["GMM_400"]
+bx = int(sp._x(g400.record_in) + 3)
+row0_y = sp.PAD + (sp.band_rows - 1 - 0) * (sp.BAND + sp.BAND_GAP) + 1
+px = img.pixelColor(int(bx * img.width() / sp.width()), int(row0_y * img.height() / sp.height()))
+check("band marks: 2 rows grow the spine by 12 px, row 0 in its take colour over GMM_400",
+      sp.band_rows == 2 and grown == 2 * (sp.BAND + sp.BAND_GAP)
+      and px.name() == fl._colour(COLOURS["warmer"]).name())
+win.grab().save(os.path.join(out, "lens_bands.png"))
+fl.preview("takes.takes", [fl.Mark("GMM_230", "#298587", "band", 3)], ("hover", []))
+pump()
+check("a preview's band never grows the spine", sp.height() - h_before == grown)
+fl.preview("takes.takes", None)
+BANDS[:] = [fl.Mark("GMM_400", "#298587", "band", r) for r in range(6)]
+fl.update("probe.bands")
+pump()
+check("six rows: four drawn, +2 said", sp.band_rows == 6
+      and sp.height() - h_before == 4 * (sp.BAND + sp.BAND_GAP))
+win.grab().save(os.path.join(out, "lens_bands_more.png"))
+fl.unregister_area("probe.bands")
+pump()
+check("no bands: the spine back to its height", sp.height() == h_before)
+
+# hold(): a tool acting on the Timeline -- Flame's moves are not the artist's
+flame.timeline.current_segment = seq.seg("GMM_230")
+fl._beat("Timeline")
+pump()
+before = (win.follower.ctx.source, win.follower.ctx.primary.key)
+with fl.hold():
+    flame.timeline.current_segment = seq.seg("GMM_400")   # the switch's saves
+    seq._now = fakeflame.Time(86452)
+    for _ in range(3):
+        fl._beat("Timeline")
+    during = (win.follower.ctx.source, win.follower.ctx.primary.key)
+pump()
+after = (win.follower.ctx.source, win.follower.ctx.primary.key)
+check("hold(): nothing moves while held, and the release takes none of it as a click",
+      before == ("click", "GMM_230") and during == before and after == before)
+
 # the live segment from the last walk
 g400_obj = fl.segment("GMM_400")
 check("segment(key) is the live segment of the last walk",

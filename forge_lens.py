@@ -51,6 +51,7 @@
 #   forge_lens.focus(key)        # the playhead to key, key the subject till it moves
 #   forge_lens.scrub(frame)      # the playhead, as the spine's drag moves it
 #   forge_lens.segment(key)      # the live PySegment from the last walk, or None
+#   with forge_lens.hold(): ...  # a tool acting on the Timeline: ignore it till done
 #
 # refresh(widget, ctx, mode): ctx.asked says why -- "subject", "settled",
 # "refresh", "update", "layout", "fold" or "build" (ASKED). An area that
@@ -87,7 +88,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.3.3"
+__version__ = "0.4.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -132,8 +133,10 @@ NARROW_WIDTH = 340
 #: version_uid (a getter) or None; kind: "picture" | "fx_gap".
 Seg = namedtuple("Seg", "key name track record_in record_out version kind")
 #: A mark on the spine: colour a take colour (rgbF tuple or "#hex") or None;
-#: style "fill" | "outline" | "dashed" | "dim_rest"; at (track, in, out) a
-#: ghost where a shot the cut no longer has used to be.
+#: style "fill" | "outline" | "dashed" | "dim_rest" | "band"; at (track, in,
+#: out) a ghost where a shot the cut no longer has used to be. A "band" is a
+#: thin bar in *colour* over the shot's span, ABOVE the tracks, in row *at*
+#: (an int, 0 nearest the tracks): forge-takes' groups, one row per take.
 Mark = namedtuple("Mark", "key colour style at", defaults=(None, "outline", None))
 #: One verb's result on one shot: label as the area says it, signature the
 #: shot's resulting stack -- tuple((type, bypassed, fxprint), ...).
@@ -732,6 +735,24 @@ class Follower(object):
         self.spine = True
         self.click = None
 
+    def rebaseline(self):
+        """After a hold(): Flame's click, frame and selection as they are
+        now, none of it the artist's -- no click, no playhead move, a held
+        click kept. The cut is walked again (a switch may have changed it).
+        The subject itself is decided on the next tick."""
+        seq = self.tl.sequence()
+        if seq is None:
+            return
+        self._clicked = self.tl.clicked()
+        self.uid = self.tl.uid(seq)
+        self.cut = self.tl.walk(seq)
+        self.selection = self.tl.selected(self.cut)
+        self._walk_asked = False
+        frame = self.tl.frame(seq)
+        self._frame = frame
+        if self.click is not None:
+            self._click_frame, self._click_seen = frame, True
+
     def reveal(self, key, frame):
         """*key* is the subject, the playhead on its way to *frame*; it holds
         until the playhead moves on from there (focus())."""
@@ -1049,6 +1070,71 @@ def toggle():
     return open()
 
 
+# --- a tool acting on the Timeline -------------------------------------------
+
+#: Beats a hold may last before the Lens lets go by itself (~60 s at 600 ms):
+#: a hold(True) whose hold(False) never came must not freeze the Lens.
+HOLD_BEATS = 100
+
+
+class _Holding(object):
+    def __enter__(self):
+        hold(True)
+        return self
+
+    def __exit__(self, *_exc):
+        hold(False)
+        return False
+
+
+def hold(on=None):
+    """A tool is acting on the Timeline: ignore it until it is done
+    (forge-takes, forge-hud#1 6568455441). A take switch saves effect
+    setups, and Flame moves the playhead, the selection and
+    current_segment while it does -- with its event loop running, so the
+    heartbeat ticked mid-switch and took those for the artist [LIVE 2027.1,
+    2026-11-01: TST_060 selected, the playhead on TST_070, two switches,
+    the Lens fell to TST_070].
+
+    ``with forge_lens.hold(): ...``, or hold(True) / hold(False); re-entrant.
+    While held the subject, the playhead line and the areas stay as they
+    were (update() still redraws an area). On the last release the Lens
+    takes Flame's click, frame and selection as they are now, as no action
+    of the artist's, and beats once on the idle queue. Flame's thread."""
+    if on is None:
+        return _Holding()
+    st = _anchor()
+    was = st.get("held", 0)
+    n = was + 1 if on else max(was - 1, 0)
+    st["held"] = n
+    if on and was == 0:
+        st["held_beats"] = 0
+    if not on and was > 0 and n == 0:
+        _let_go()
+    return None
+
+
+def _let_go():
+    win = _anchor().get("window")
+    if win is None:
+        return
+    try:
+        win.follower.rebaseline()
+    except Exception as exc:
+        _pen("hold release failed: {0!r}".format(exc))
+
+    def beat():
+        w = _anchor().get("window")
+        if w is not None and w.isVisible():
+            w.beat(w.follower.ctx.tab)
+    later(beat)
+
+
+def held():
+    """Whether a tool holds the Lens (hold())."""
+    return _anchor().get("held", 0) > 0
+
+
 # --- the family's opener ------------------------------------------------------
 
 def opener_installed():
@@ -1097,6 +1183,14 @@ def _beat(tab):
         if st.get("away"):
             st["away"] = False
             win.show()
+        if held():
+            st["held_beats"] = st.get("held_beats", 0) + 1
+            if st["held_beats"] < HOLD_BEATS:
+                return                # a tool is acting: Flame's moves aren't the artist's
+            _pen("hold never released: let go after {0} beats".format(HOLD_BEATS))
+            st["held"] = 0
+            _let_go()
+            return
         if win.isVisible():
             win.beat(tab)
     except Exception as exc:
@@ -1940,6 +2034,8 @@ else:
         the idle queue."""
 
         ROW, GAP, PAD = 11, 3, 6
+        #: band rows over the tracks: height, gap, and how many before "+n"
+        BAND, BAND_GAP, BANDS = 4, 2, 4
         #: How near the playhead's line a press grabs it, in pixels -- room
         #: for a pen (forge-takes' GRAB).
         GRAB = 5
@@ -1954,12 +2050,18 @@ else:
             self.subject = set()
             self.fills = {}
             self.marks = []
+            self.bands = []           # the areas' band marks (overlay)
+            self.band_rows = 0        # rows held for them
+            self._extents = ()
             self._press = False       # the playhead grabbed
             self._down = None         # the segment pressed, acted on at release
             self._lit = False         # the line can be grabbed
             self.hold(())
 
-        def hold(self, extents):
+        def hold(self, extents=None):
+            if extents is None:
+                extents = self._extents
+            self._extents = tuple(extents)
             cut = self.cut
             first = min([s.record_in for s in cut] + [e[0] for e in extents]) if (cut or extents) \
                 else 0
@@ -1967,8 +2069,19 @@ else:
                 else 1
             tracks = max([s.track + 1 for s in cut] + [e[2] for e in extents] + [1])
             self.span = (first, max(last, first + 1), tracks)
-            self.setFixedHeight(2 * self.PAD + tracks * self.ROW + (tracks - 1) * self.GAP)
+            self.setFixedHeight(2 * self.PAD + self._top() + tracks * self.ROW
+                                + (tracks - 1) * self.GAP)
             self.update()
+
+        def _top(self):
+            """The height the band rows take over the tracks."""
+            n = min(self.band_rows, self.BANDS)
+            return n * (self.BAND + self.BAND_GAP)
+
+        def band_rows_for(self, marks):
+            rows = [m.at for m in marks if m.style == "band" and isinstance(m.at, int)
+                    and m.at >= 0]
+            return (max(rows) + 1) if rows else 0
 
         def _x(self, frame):
             first, last, _t = self.span
@@ -1984,26 +2097,61 @@ else:
         def _rect(self, track, start, end):
             tracks = self.span[2]
             x0, x1 = self._x(start), self._x(end + 1)
-            y = self.PAD + (tracks - 1 - track) * (self.ROW + self.GAP)
+            y = self.PAD + self._top() + (tracks - 1 - track) * (self.ROW + self.GAP)
             return QtCore.QRectF(x0, y, max(x1 - x0 - 1, 1.5), self.ROW)
+
+        def _paint_bands(self, p, marks):
+            n = min(self.band_rows, self.BANDS)
+            if not n:
+                return
+            by_key = dict((s.key, s) for s in self.cut)
+            hidden = 0
+            for m in marks:
+                if m.style != "band" or not isinstance(m.at, int) or m.at < 0:
+                    continue
+                if m.at >= n:
+                    hidden = max(hidden, m.at + 1 - n)
+                    continue
+                s = by_key.get(m.key)
+                if s is None:
+                    continue
+                x0, x1 = self._x(s.record_in), self._x(s.record_out + 1)
+                y = self.PAD + (n - 1 - m.at) * (self.BAND + self.BAND_GAP)
+                p.fillRect(QtCore.QRectF(x0, y, max(x1 - x0 - 1, 1.5), self.BAND),
+                           _colour(m.colour))
+            if hidden:
+                # rows past BANDS: said, at the top row's right end
+                f = p.font()
+                f.setPixelSize(9)
+                p.setFont(f)
+                text = "+{0}".format(hidden)
+                w = p.fontMetrics().horizontalAdvance(text) + 6
+                r = QtCore.QRectF(self.width() - self.PAD - w, 0, w, self.PAD + self.BAND + 2)
+                p.fillRect(r, QtGui.QColor(PANEL))
+                p.setPen(QtGui.QColor("#aab2c2"))
+                p.drawText(r, QtCore.Qt.AlignCenter, text)
 
         def paintEvent(self, _event):                # noqa: N802
             p = QtGui.QPainter(self)
             p.setRenderHint(QtGui.QPainter.Antialiasing, False)
             tracks = self.span[2]
             width = max(self.width() - 2 * self.PAD, 1)
+            top = self._top()
             for t in range(tracks):
-                p.fillRect(QtCore.QRectF(self.PAD, self.PAD + t * (self.ROW + self.GAP), width,
-                                         self.ROW), QtGui.QColor("#1b1d24"))
+                p.fillRect(QtCore.QRectF(self.PAD, self.PAD + top + t * (self.ROW + self.GAP),
+                                         width, self.ROW), QtGui.QColor("#1b1d24"))
+            self._paint_bands(p, list(self.bands) + [m for m in self.marks
+                                                     if m.style == "band"])
             # a shot's marks merged: its fill colour, and how it is stroked
             fill_of, styles = {}, {}
-            for m in self.marks:
+            marks = [m for m in self.marks if m.style != "band"]
+            for m in marks:
                 if m.at is not None:
                     continue
                 styles.setdefault(m.key, set()).add(m.style)
                 if m.style == "fill" and m.colour is not None:
                     fill_of[m.key] = m.colour
-            dim = any(m.style == "dim_rest" for m in self.marks)
+            dim = any(m.style == "dim_rest" for m in marks)
             white = QtGui.QColor("#f2f2f2")
             for s in self.cut:
                 r = self._rect(s.track, s.record_in, s.record_out)
@@ -2022,14 +2170,14 @@ else:
                     p.fillRect(r, c)
                 dashed = "dashed" in marked and not marked & {"outline", "dim_rest"}
                 if marked & {"outline", "dashed", "dim_rest"} or \
-                        (not self.marks and s.key in self.subject):
+                        (not marks and s.key in self.subject):
                     pen = QtGui.QPen(QtGui.QColor("#8a91a0") if dashed else white, 1.2)
                     if dashed:
                         pen.setStyle(QtCore.Qt.DashLine)
                     p.setPen(pen)
                     p.setBrush(QtCore.Qt.NoBrush)
                     p.drawRect(r.adjusted(0.6, 0.6, -0.6, -0.6))
-            for m in self.marks:
+            for m in marks:
                 if m.at is None:
                     continue
                 r = self._rect(*m.at)
@@ -2264,6 +2412,7 @@ else:
             self._empty.setVisible(not self.frames)
             self.chips()
             self.refresh_area(area_id, "build")
+            self.paint_spine(hold=False)          # its overlay, now -- not next beat
 
         def drop_area(self, area_id):
             frame = self.frames.pop(area_id, None)
@@ -2273,6 +2422,7 @@ else:
                 _drop(frame)
             self._empty.setVisible(not self.frames)
             self.chips()
+            self.paint_spine(hold=False)          # its marks gone with it
 
         def hidden(self):
             return set(_load_state().get("hidden") or ())
@@ -2374,6 +2524,7 @@ else:
             self.spine.frame = ctx.frame
             self.spine.subject = set(s.key for s in ctx.segments)
             fills = {}
+            bands = []
             extents = []
             for area_id in _anchor()["order"]:
                 if area_id not in self.frames:
@@ -2382,11 +2533,20 @@ else:
                     m = Mark(*m) if not isinstance(m, Mark) else m
                     if m.style == "fill" and m.colour is not None:
                         fills[m.key] = m.colour
+                    elif m.style == "band":
+                        bands.append(m)
                 if hold:
                     e = self._call(area_id, "extent", ctx)
                     if e:
                         extents.append(tuple(e))
             self.spine.fills = fills
+            self.spine.bands = bands
+            # band rows come from the overlays only: a preview never grows it
+            rows = self.spine.band_rows_for(bands)
+            if rows != self.spine.band_rows:
+                self.spine.band_rows = rows
+                if not hold:
+                    self.spine.hold()             # the subject's extents, kept
             if hold:
                 self.spine.hold(extents)
             self.show_preview()

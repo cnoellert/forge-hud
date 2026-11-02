@@ -439,3 +439,45 @@ def test_the_rail_finds_the_lens_and_defers_its_verb():
     assert ran == [] and len(flame.idle) == 1
     flame.idle.pop()()
     assert ran == [1]
+
+
+# --- hold(): a tool acting on the Timeline ------------------------------------------
+
+def test_hold_is_reentrant_and_a_context_manager():
+    assert not fl.held()
+    with fl.hold():
+        assert fl.held()
+        fl.hold(True)
+        fl.hold(False)
+        assert fl.held()                  # the outer hold still stands
+    assert not fl.held()
+    fl.hold(False)                        # an extra release does no harm
+    assert not fl.held() and fl._anchor()["held"] == 0
+
+
+@needs_linktest2
+def test_after_a_hold_flames_moves_are_not_the_artists():
+    """forge-takes' case: a click on TST_060-like GMM_230, the playhead
+    elsewhere; a switch moves the playhead, the selection and
+    current_segment and puts some back. After the hold: no click, no
+    playhead move, the artist's click still leads."""
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    focus_on(seq, 1)
+    f, flame = follower(seq)
+    seq._now = fakeflame.Time(86600)
+    f.tick("Timeline")
+    flame.timeline.current_segment = seq.seg("GMM_230")
+    ctx, _m, _s, _f = f.tick("Timeline")
+    assert ctx.source == "click" and ctx.primary.key == "GMM_230"
+    # the switch, while held: the Follower isn't ticked; Flame moves things
+    g400 = seq.seg("GMM_400")
+    flame.timeline.current_segment = g400               # Flame made it current
+    seq._now = fakeflame.Time(86452)                    # and parked the playhead
+    f.rebaseline()                                      # the release
+    ctx, moved, _s, frame_moved = f.tick("Timeline")
+    assert ctx.source == "click" and ctx.primary.key == "GMM_230" and not moved
+    assert not frame_moved and not ctx.playing
+    # the artist moves the playhead afterwards: the playhead leads again
+    seq._now = fakeflame.Time(86460)
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert ctx.source == "playhead"

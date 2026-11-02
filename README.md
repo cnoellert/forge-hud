@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.3.3)
+## The one Lens (`forge_lens.py`, 0.4.0)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -258,6 +258,17 @@ Two things save an area from reaching into the window:
 - **`forge_lens.segment(key)`** is the live `PySegment` from the Lens's last
   walk (Flame's thread), or `None` when the timeline was edited since:
   its name or record in no longer match.
+- **`with forge_lens.hold():`** around anything that moves the Timeline on
+  the artist's behalf (a take switch saving effect setups). While held the
+  Lens reads nothing; on release it takes Flame's click, frame and
+  selection as they are, as no action of the artist's. Re-entrant; a hold
+  never released lets go by itself after about a minute.
+
+On the spine, a `Mark(key, colour, "band", row)` is a thin bar in the
+take's colour over that shot, in a row above the tracks (0 nearest them),
+one row per take for forge-takes' groups. The spine grows by the rows the
+areas' overlays use, up to four and then "+n"; a preview's bands never grow
+it.
 
 Tests: `pytest tests` (no Qt needed); the window itself, offscreen under
 Flame's Python: `PYTHONPATH=../forge-streams/src
