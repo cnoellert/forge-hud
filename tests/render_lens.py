@@ -313,6 +313,43 @@ pump()
 check("a plain click in the timeline (nothing selected) leads",
       win.follower.ctx.source == "click" and win.follower.ctx.primary.key == "GMM_400")
 
+
+# why each refresh was asked (ctx.asked), as an area sees it
+asked = []
+fl.register_area("probe.asked", "Probe", build=lambda p, c: QtWidgets.QLabel("probe"),
+                 refresh=lambda w, c, m: asked.append(c.asked),
+                 summary=lambda c: {"html": str(c.asked), "tone": "neutral"})
+pump()
+win.frames["probe.asked"].set_fold("expanded")
+pump()
+fl.update("probe.asked")
+win.refresh_all()
+seq._now = fakeflame.Time(86600)                      # GMM_410 V2: the subject moves
+flame.timeline.current_segment = None
+win.follower.click = None
+for _ in range(4):
+    fl._beat("Timeline")
+pump()
+win.set_mode("wide")
+pump()
+win.set_mode("narrow")
+pump()
+want = ["build", "fold", "update", "refresh", "subject", "settled", "layout"]
+check("ctx.asked says why: " + ", ".join(want),
+      all(w in asked for w in want) and asked[0] == "build"
+      and win.follower.ctx.asked is None)
+fl.unregister_area("probe.asked")
+pump()
+
+# the live segment from the last walk
+g400_obj = fl.segment("GMM_400")
+check("segment(key) is the live segment of the last walk",
+      g400_obj is seq.seg("GMM_400") and fl.segment("no such shot") is None)
+g400_obj.record_in = fakeflame.Time(g400_obj.record_in.frame + 5)
+check("segment(key) is None once the timeline was edited since the walk",
+      fl.segment("GMM_400") is None)
+g400_obj.record_in = fakeflame.Time(g400_obj.record_in.frame - 5)
+
 win.set_mode("wide")
 win.resize(1500, 1100)
 pump()

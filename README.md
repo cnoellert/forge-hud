@@ -191,7 +191,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   rail. A reload stops the old heartbeat (or a ≤ 1.9 dock's) and starts
   one with the new code.
 
-## The one Lens (`forge_lens.py`, 0.2.2)
+## The one Lens (`forge_lens.py`, 0.3.0)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -241,6 +241,15 @@ forge-streams' `SegmentGraph(host)` draws the Depends area pixel for pixel
 as the standalone window draws it (`tests/render_lens.py` checks that, narrow
 and wide). The contract is r3 on forge-hud#1; the API is in the module
 header.
+
+Two things save an area from reaching into the window:
+
+- **`ctx.asked`** says why this refresh: `subject`, `settled`, `refresh`,
+  `update`, `layout`, `fold` or `build`. An area that reads from disk only
+  on some of them redraws on the rest, and reads on a value it doesn't know.
+- **`forge_lens.segment(key)`** is the live `PySegment` from the Lens's last
+  walk (Flame's thread), or `None` when the timeline was edited since:
+  its name or record in no longer match.
 
 Tests: `pytest tests` (no Qt needed); the window itself, offscreen under
 Flame's Python: `PYTHONPATH=../forge-streams/src

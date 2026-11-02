@@ -48,6 +48,11 @@
 #   forge_lens.open() / toggle() / close() / is_open()
 #   forge_lens.focus(key)        # the playhead to key, key the subject till it moves
 #   forge_lens.scrub(frame)      # the playhead, as the spine's drag moves it
+#   forge_lens.segment(key)      # the live PySegment from the last walk, or None
+#
+# refresh(widget, ctx, mode): ctx.asked says why -- "subject", "settled",
+# "refresh", "update", "layout", "fold" or "build" (ASKED). An area that
+# reads from disk only on some redraws on the rest.
 #   forge_lens.update(area_id)   # this area's state changed (None = all)
 #   forge_lens.preview(area_id, marks | None, caption=None)
 #   forge_lens.same_as(area_id, key, signature) -> [(area_id, label)]
@@ -80,7 +85,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -137,11 +142,12 @@ class Ctx(object):
     """The context every area is handed. Plain attributes, never live Flame
     objects: tab, sequence, sequence_uid, tags, segments, primary, source,
     pinned, settled, playing, frame, over, visible, shots (+ cut, in cut
-    order)."""
+    order), and asked -- why this refresh, set just before each area's
+    refresh / summary / effects (else None): one of ASKED."""
 
     __slots__ = ("tab", "sequence", "sequence_uid", "tags", "segments", "primary",
                  "source", "pinned", "settled", "playing", "frame", "over",
-                 "visible", "shots", "cut")
+                 "visible", "shots", "cut", "asked")
 
     def __init__(self, **kw):
         for name in self.__slots__:
@@ -163,6 +169,14 @@ class Ctx(object):
         return "Ctx({0} {1} {2}{3})".format(self.sequence, self.source,
                                             p.name if p else None,
                                             " settled" if self.settled else "")
+
+
+#: Why an area is refreshed (ctx.asked): the subject moved (or the sequence);
+#: it settled; Refresh; update() of it or of an area it follows; the window
+#: went narrow/wide; its fold changed; it was just built (registered, or
+#: re-registered live). An area that reads only on some of these redraws on
+#: the rest -- and treats a value it doesn't know as a reason to read.
+ASKED = ("subject", "settled", "refresh", "update", "layout", "fold", "build")
 
 
 # --- process-global anchor (survives reloads) -------------------------------
@@ -890,7 +904,7 @@ def update(area_id=None):
     if win is None:
         return
     try:
-        win.update_areas(area_id)
+        win.update_areas(area_id, asked="update")
     except Exception as exc:
         _pen("update failed: {0!r}".format(exc))
 
@@ -902,6 +916,31 @@ def focus(key):
     win = _anchor().get("window")
     if win is not None:
         win.focus(key)
+
+
+def segment(key):
+    """The live PySegment for *key*, from the cut the Lens last walked --
+    Flame's thread. None when there is no window, no such key, or the
+    segment no longer is what the walk saw (its name or record in changed:
+    the timeline was edited since, without a click) -- walk it yourself
+    then, or update()."""
+    win = _anchor().get("window")
+    if win is None:
+        return None
+    cut = win.follower.cut
+    seg, obj = cut.by_key.get(key), cut.objects.get(key)
+    if seg is None or obj is None:
+        return None
+    try:
+        if _frame(obj.record_in) != seg.record_in:
+            return None
+        if seg.kind == "picture" and not key.startswith("track "):
+            names = (_s(obj.name), _s(getattr(obj, "shot_name", "")))
+            if segment_base(key) not in names:
+                return None
+    except Exception:
+        return None                   # a segment the edit deleted
+    return obj
 
 
 def scrub(frame, done=True):
@@ -1692,7 +1731,7 @@ else:
             _save_state(fold=folds)
             self.win.close_popout()
             self.apply_fold()
-            self.win.refresh_area(self.area_id)
+            self.win.refresh_area(self.area_id, "fold")
 
         def cycle(self):
             i = FOLDS.index(self.fold)
@@ -2142,7 +2181,7 @@ else:
             frame.setVisible(area_id not in self.hidden())
             self._empty.setVisible(not self.frames)
             self.chips()
-            self.refresh_area(area_id)
+            self.refresh_area(area_id, "build")
 
         def drop_area(self, area_id):
             frame = self.frames.pop(area_id, None)
@@ -2207,20 +2246,25 @@ else:
                 _guard_line(area_id, name, exc)
                 return None
 
-        def refresh_area(self, area_id):
+        def refresh_area(self, area_id, asked="refresh"):
             """One area against the context: refresh, then what it says on
-            the header, the spine and to the others."""
+            the header, the spine and to the others. *asked*: why (ASKED),
+            on ctx.asked for these calls only."""
             frame = self.frames.get(area_id)
             if frame is None:
                 return
             ctx = self.follower.ctx
             host = self.hosts.get(area_id)
             mode = host.mode if host is not None else "narrow"
-            if frame.content is not None and frame.fold != "collapsed":
-                self._call(area_id, "refresh", frame.content, ctx, mode)
-            frame.set_summary(self._call(area_id, "summary", ctx))
-            frame.tint_tools(ctx)
-            effects = self._call(area_id, "effects", ctx)
+            was, ctx.asked = ctx.asked, asked      # an update() inside a refresh nests
+            try:
+                if frame.content is not None and frame.fold != "collapsed":
+                    self._call(area_id, "refresh", frame.content, ctx, mode)
+                frame.set_summary(self._call(area_id, "summary", ctx))
+                frame.tint_tools(ctx)
+                effects = self._call(area_id, "effects", ctx)
+            finally:
+                ctx.asked = was
             st = _anchor()
             if effects is not None:
                 st["effects"][area_id] = dict((k, [Effect(*e) for e in v])
@@ -2228,7 +2272,7 @@ else:
             else:
                 st["effects"].pop(area_id, None)
 
-        def update_areas(self, area_id=None, paint=True):
+        def update_areas(self, area_id=None, paint=True, asked="refresh"):
             if area_id is None:
                 ids = [a for a in _anchor()["order"] if a in self.frames]
             else:
@@ -2236,7 +2280,7 @@ else:
                                    and area_id in (_anchor()["areas"].get(a) or {})
                                    .get("follows", ())]
             for a in ids:
-                self.refresh_area(a)
+                self.refresh_area(a, asked)
             if paint:
                 self.paint_spine(hold=False)
 
@@ -2279,23 +2323,24 @@ else:
 
         # -- the subject ----------------------------------------------------------
 
-        def beat(self, tab, force=False):
+        def beat(self, tab, force=False, asked=None):
             ctx, moved, settled, frame_moved = self.follower.tick(tab)
             if moved or force:
                 self.close_popout()
                 _anchor()["previews"].clear()
                 self._said_subject(ctx)
-                self.update_areas(None, paint=False)
+                self.update_areas(None, paint=False,
+                                  asked=asked or ("subject" if moved else "refresh"))
                 self.paint_spine(hold=True)
             elif settled:
-                self.update_areas(None)
+                self.update_areas(None, asked="settled")
             elif frame_moved:
                 self.spine.frame = ctx.frame
                 self.spine.update()
 
         def refresh_all(self):
             self.follower.rewalk()
-            self.beat(self.follower.ctx.tab, force=True)
+            self.beat(self.follower.ctx.tab, force=True, asked="refresh")
 
         def focus(self, key):
             """The playhead to *key*'s first frame, and *key* the subject until
@@ -2428,7 +2473,7 @@ else:
             for frame in self.frames.values():
                 frame.head()
                 frame.apply_fold()
-            self.update_areas(None)
+            self.update_areas(None, asked="layout")
 
         def _apply_mode(self):
             narrow = self.mode == "narrow"
