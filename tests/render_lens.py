@@ -374,6 +374,21 @@ fl.unregister_area("probe.bands")
 pump()
 check("no bands: the spine back to its height", sp.height() == h_before)
 
+# a mark from a newer area, or a broken one, is skipped -- never raised
+fl.register_area("probe.odd", "Odd", build=lambda p, c: QtWidgets.QLabel("o"),
+                 refresh=lambda w, c, m: None,
+                 overlay=lambda c: [fl.Mark("GMM_400", "#ffffff", "sparkle", {"x": 1}),
+                                    ("too", "many", "fields", "for", "a", "mark"),
+                                    fl.Mark("GMM_400", "#298587", "fill")])
+fl.preview("probe.odd", [fl.Mark("GMM_400", None, "outline", 7)], None)
+pump()
+win.grab()
+check("unknown marks are skipped, the good one still drawn",
+      win.frames["probe.odd"]._guard.isHidden() and sp.fills.get("GMM_400") == "#298587")
+fl.preview("probe.odd", None)
+fl.unregister_area("probe.odd")
+pump()
+
 # hold(): a tool acting on the Timeline -- Flame's moves are not the artist's
 flame.timeline.current_segment = seq.seg("GMM_230")
 fl._beat("Timeline")

@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.4.0)
+## The one Lens (`forge_lens.py`, 0.4.1)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends

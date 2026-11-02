@@ -88,7 +88,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -1358,6 +1358,17 @@ def _drop(widget):
 
 
 
+def _as_mark(m):
+    """*m* as a Mark, or None when it can't be one -- a bad mark from an
+    area is dropped, never raised into the beat."""
+    if isinstance(m, Mark):
+        return m
+    try:
+        return Mark(*m)
+    except Exception:
+        return None
+
+
 def _onto_its_screen(widget):
     """Tell *widget*'s window the screen it is really on. Moved by our own
     header drag onto a second monitor, the Lens kept its first screen in
@@ -2178,7 +2189,9 @@ else:
                     p.setBrush(QtCore.Qt.NoBrush)
                     p.drawRect(r.adjusted(0.6, 0.6, -0.6, -0.6))
             for m in marks:
-                if m.at is None:
+                # a ghost only where at is (track, in, out): a style or an
+                # at this spine doesn't know (a newer area's) is skipped
+                if not (isinstance(m.at, (tuple, list)) and len(m.at) == 3):
                     continue
                 r = self._rect(*m.at)
                 pen = QtGui.QPen(_colour(m.colour, "#8a91a0"), 1.0)
@@ -2530,7 +2543,9 @@ else:
                 if area_id not in self.frames:
                     continue
                 for m in self._call(area_id, "overlay", ctx) or ():
-                    m = Mark(*m) if not isinstance(m, Mark) else m
+                    m = _as_mark(m)
+                    if m is None:
+                        continue
                     if m.style == "fill" and m.colour is not None:
                         fills[m.key] = m.colour
                     elif m.style == "band":
@@ -2555,7 +2570,7 @@ else:
             previews = _anchor()["previews"]
             marks, caption = [], None
             for area_id, (m, cap) in previews.items():
-                marks += [x if isinstance(x, Mark) else Mark(*x) for x in m]
+                marks += [x for x in (_as_mark(y) for y in m) if x is not None]
                 caption = cap if cap is not None else caption
             self.spine.marks = marks
             head, lines = (caption or ("", []))
