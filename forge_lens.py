@@ -87,7 +87,7 @@ import re
 import threading
 from collections import namedtuple
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -1839,19 +1839,27 @@ else:
             text, menu_fn = tool[0], tool[1]
             btn = QtWidgets.QPushButton(text)
             btn.setStyleSheet(BAR_BTN + " QPushButton { padding: 2px 8px; font-size: 11px; }")
-            menu = QtWidgets.QMenu(btn)
 
             def show():
-                # not setMenu: QPushButton's own drop keeps the screen the
-                # menu was first made on (see _onto_its_screen)
-                menu.clear()
+                # A fresh menu every click, never one reused: on Flame 2027.1
+                # (macOS, two screens of different scale) a reused QMenu
+                # opened right the first time and on the primary screen the
+                # next, at the right point read as the other screen's local
+                # coordinates; a fresh one lands right every time [LIVE
+                # 2027.1, 2026-11-01, forge-streams' NSWindow log]. Not
+                # setMenu either: its drop reuses the menu.
+                menu = QtWidgets.QMenu(btn)
+                menu.aboutToHide.connect(menu.deleteLater)   # after its action runs
                 try:
                     menu_fn(menu, self.win.follower.ctx)
                 except Exception as exc:
                     _guard_line(self.area_id, "tool", exc)
+                    menu.deleteLater()
                     return
                 if menu.actions():
                     _menu_under(btn, menu)
+                else:
+                    menu.deleteLater()
             btn.setText(text + "  \u25be")
             btn.clicked.connect(lambda _c=False: show())
             btn._tone_fn = tool[2] if len(tool) > 2 else None
