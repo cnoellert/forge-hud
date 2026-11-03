@@ -64,6 +64,7 @@
 #   forge_lens.read(fn, then, key=None, late=None, wait=READ_WAIT, area=None)
 #   forge_lens.on_release(widget, fn) / on_double(widget, fn)
 #   forge_lens.popout(area_id, beside, content)
+#   forge_lens.popup_under(button, menu)  # a menu that stays on the button's screen
 #   forge_lens.state(area_id, mode) -> dict, saved as it is written
 #   forge_lens.host(area_id)     # the area's AreaHost (see below)
 #
@@ -85,10 +86,11 @@ import builtins
 import json
 import os
 import re
+import sys
 import threading
 from collections import namedtuple
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -1389,9 +1391,11 @@ def _onto_its_screen(widget):
         pass
 
 
-def _menu_under(button, menu):
-    """*menu* dropped from *button*, on the button's own screen -- the screen
-    under the point, not whatever screen the menu's window was made on."""
+def popup_under(button, menu):
+    """*menu* dropped from *button*, on the button's own screen, and kept
+    there: the screen under the point, not whatever screen the menu's window
+    was made on, and not the one macOS moves it to afterwards. For a menu
+    outside the Lens's header tools too (forge-streams' standalone Lens)."""
     pos = button.mapToGlobal(QtCore.QPoint(0, button.height()))
     try:
         here = QtGui.QGuiApplication.screenAt(button.mapToGlobal(button.rect().center()))
@@ -1400,6 +1404,43 @@ def _menu_under(button, menu):
     except Exception:
         pass
     menu.popup(pos)
+    _stay_where_put(menu)
+
+
+#: NSWindowCollectionBehavior: on every Space; follows the active Space.
+_ALL_SPACES, _MOVE_TO_ACTIVE_SPACE = 1, 2
+
+
+def _stay_where_put(menu):
+    """macOS moves a popup off a screen that isn't the primary, about 120 ms
+    after it opens: no Python on the stack, the window right until then, the
+    landing point off the Lens and sometimes off every screen. Swapping the
+    window's move-to-active-Space for all-Spaces stops it, with no flash
+    [LIVE 2027.1, 2026-11-02, forge-streams: separate Spaces on, 8 real clicks
+    on the laptop, behaviour 257, none moved]. Why it works isn't proven.
+
+    Cocoa only: anywhere else winId() is no NSView, and a message to it would
+    take Flame down. Flame has no PyObjC, so ctypes, each call with its exact
+    signature (arm64). Failing here leaves a menu that moves, as before."""
+    try:
+        if sys.platform != "darwin" or QtGui.QGuiApplication.platformName() != "cocoa":
+            return
+        import ctypes
+        objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        sel = objc.sel_registerName
+        send = ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+        ptr, uint = ctypes.c_void_p, ctypes.c_ulong
+        window = ctypes.CFUNCTYPE(ptr, ptr, ptr)(send)(int(menu.winId()), sel(b"window"))
+        if not window:
+            return
+        now = ctypes.CFUNCTYPE(uint, ptr, ptr)(send)(window, sel(b"collectionBehavior"))
+        wanted = (now & ~_MOVE_TO_ACTIVE_SPACE) | _ALL_SPACES
+        ctypes.CFUNCTYPE(None, ptr, ptr, uint)(send)(
+            window, sel(b"setCollectionBehavior:"), wanted)
+    except Exception as exc:
+        _pen("a menu's window: {0!r}".format(exc))
 
 
 def _label(text, name="dim", wrap=False):
@@ -1946,13 +1987,10 @@ else:
             btn.setStyleSheet(BAR_BTN + " QPushButton { padding: 2px 8px; font-size: 11px; }")
 
             def show():
-                # A fresh menu every click, never one reused: on Flame 2027.1
-                # (macOS, two screens of different scale) a reused QMenu
-                # opened right the first time and on the primary screen the
-                # next, at the right point read as the other screen's local
-                # coordinates; a fresh one lands right every time [LIVE
-                # 2027.1, 2026-11-01, forge-streams' NSWindow log]. Not
-                # setMenu either: its drop reuses the menu.
+                # A fresh menu every click, never one reused: it holds no
+                # stale items or window. It doesn't keep the menu on its
+                # screen, as 0.3.3 claimed: that reading was taken before
+                # macOS moved it (see _stay_where_put).
                 menu = QtWidgets.QMenu(btn)
                 menu.aboutToHide.connect(menu.deleteLater)   # after its action runs
                 try:
@@ -1962,7 +2000,7 @@ else:
                     menu.deleteLater()
                     return
                 if menu.actions():
-                    _menu_under(btn, menu)
+                    popup_under(btn, menu)
                 else:
                     menu.deleteLater()
             btn.setText(text + "  \u25be")

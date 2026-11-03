@@ -389,6 +389,26 @@ fl.preview("probe.odd", None)
 fl.unregister_area("probe.odd")
 pump()
 
+# a menu's window: only Cocoa has an NSView behind winId() to message
+class SpyMenu(QtWidgets.QMenu):
+    asked = 0
+
+    def winId(self):
+        SpyMenu.asked += 1
+        return QtWidgets.QMenu.winId(self)
+
+
+spy_btn = QtWidgets.QPushButton("Views", win)
+spy = SpyMenu(spy_btn)
+spy.addAction("In Flight")
+fl.popup_under(spy_btn, spy)
+pump()
+check("off Cocoa popup_under opens the menu and leaves its window alone",
+      spy.isVisible() and SpyMenu.asked == 0)
+spy.close()
+spy_btn.setParent(None)
+spy_btn.deleteLater()
+
 # hold(): a tool acting on the Timeline -- Flame's moves are not the artist's
 flame.timeline.current_segment = seq.seg("GMM_230")
 fl._beat("Timeline")

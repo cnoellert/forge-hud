@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.4.1)
+## The one Lens (`forge_lens.py`, 0.4.2)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -263,6 +263,10 @@ Two things save an area from reaching into the window:
   Lens reads nothing; on release it takes Flame's click, frame and
   selection as they are, as no action of the artist's. Re-entrant; a hold
   never released lets go by itself after about a minute.
+- **`forge_lens.popup_under(button, menu)`** drops a menu from a button and
+  keeps it on the button's screen. On macOS with two screens, the system
+  otherwise moves a popup off a non-primary screen about 120 ms after it
+  opens. Header tools get this already; use it for a menu of your own.
 
 On the spine, a `Mark(key, colour, "band", row)` is a thin bar in the
 take's colour over that shot, in a row above the tracks (0 nearest them),
