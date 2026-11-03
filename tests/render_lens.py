@@ -436,6 +436,92 @@ fl.unregister_area("probe.bands")
 pump()
 check("no bands: the spine back to its height", sp.height() == h_before)
 
+# a standing filter: an overlay's dim_rest lights its shots and dims the rest
+def _spine_px(key):
+    s = win.follower.cut.by_key[key]
+    r = sp._rect(s.track, s.record_in, s.record_out)
+    img = sp.grab().toImage()
+    fx, fy = img.width() / sp.width(), img.height() / sp.height()
+    return img.pixelColor(int(r.center().x() * fx), int(r.center().y() * fy)).name()
+
+
+def _subject_stroke_px(key):
+    s = win.follower.cut.by_key[key]
+    r = sp._rect(s.track, s.record_in, s.record_out)
+    img = sp.grab().toImage()
+    fx, fy = img.width() / sp.width(), img.height() / sp.height()
+    return img.pixelColor(int(r.center().x() * fx), int((r.top() + 0.6) * fy)).name()
+
+
+fl.preview("takes.takes", None)
+FILTER = []
+fl.register_area("probe.filter", "Filter", build=lambda p, c: QtWidgets.QLabel("f"),
+                 refresh=lambda w, c, m: None, overlay=lambda c: list(FILTER))
+pump()
+plain_400, plain_230 = _spine_px("GMM_400"), _spine_px("GMM_230")
+h_before = sp.height()
+FILTER[:] = [fl.Mark("GMM_400", None, "dim_rest")]
+fl.update("probe.filter")
+pump()
+check("a filter: its shot lit as it was, the rest dimmed, the spine the same size",
+      sp.lit == {"GMM_400"} and _spine_px("GMM_400") == plain_400
+      and _spine_px("GMM_230") != plain_230 and sp.height() == h_before)
+dimmed_230 = _spine_px("GMM_230")
+win.grab().save(os.path.join(out, "lens_filter.png"))
+subject = sorted(sp.subject)[0] if sp.subject else None
+check("a filter strokes no member; the subject keeps its outline",
+      subject is not None and subject != "GMM_400"
+      and _subject_stroke_px(subject) == "#f2f2f2"
+      and _subject_stroke_px("GMM_400") == plain_400)
+fl.preview("takes.takes", [fl.Mark("GMM_230", "#298587", "fill")], ("hover", []))
+pump()
+check("a hover takes over from the filter", _spine_px("GMM_230") == "#298587"
+      and _spine_px("GMM_400") == plain_400)
+fl.preview("takes.takes", [fl.Mark("GMM_230", None, "dim_rest")], ("hover", []))
+pump()
+check("a hover's own dim is its own: the filter's member dims under it",
+      _spine_px("GMM_230") == plain_230 and _spine_px("GMM_400") != plain_400)
+fl.preview("takes.takes", None)
+pump()
+check("the hover gone: the filter is back", _spine_px("GMM_230") == dimmed_230
+      and _spine_px("GMM_400") == plain_400)
+win.beat("Timeline", force=True)
+pump()
+check("a filter outlives a beat that clears previews", sp.lit == {"GMM_400"}
+      and _spine_px("GMM_230") == dimmed_230)
+FILTER[:] = [fl.Mark(None, None, "dim_rest")]
+fl.update("probe.filter")
+pump()
+check("a filter with no members in this cut dims every segment",
+      _spine_px("GMM_400") != plain_400 and _spine_px("GMM_230") == dimmed_230)
+FILTER[:] = [fl.Mark("GMM_400", fl.OLD_LOOK_COLOUR, "fill")]
+fl.update("probe.filter")
+pump()
+check("the reserved fill paints like any fill; the filter gone, nothing is dim",
+      sp.lit is None and _spine_px("GMM_400") == fl.OLD_LOOK_COLOUR
+      and _spine_px("GMM_230") == plain_230)
+win.grab().save(os.path.join(out, "lens_old_look.png"))
+FILTER[:] = [fl.Mark(subject, fl.OLD_LOOK_COLOUR, "fill")]
+fl.update("probe.filter")
+pump()
+check("the subject on the reserved fill keeps a stroke that shows",
+      _spine_px(subject) == fl.OLD_LOOK_COLOUR and _subject_stroke_px(subject) == "#1b1d24")
+FILTER[:] = [fl.Mark(subject, fl.OLD_LOOK_COLOUR, "fill"), fl.Mark("GMM_400", None, "dim_rest")]
+fl.update("probe.filter")
+pump()
+check("dimmed, it is white again: the ground is dark",
+      _subject_stroke_px(subject) == "#f2f2f2")
+fl.unregister_area("probe.filter")
+pump()
+check("the area gone: the spine as it was", sp.lit is None
+      and _spine_px("GMM_400") == plain_400)
+
+# the reserved colour is outside the band every take's colour comes from
+import colorsys
+_h, _s, _v = colorsys.rgb_to_hsv(*fl._colour(fl.OLD_LOOK_COLOUR).getRgbF()[:3])
+check("no take can wear the reserved fill: saturation and value both off the band",
+      _s < 0.44 and _v > 0.70)
+
 # a mark from a newer area, or a broken one, is skipped -- never raised
 fl.register_area("probe.odd", "Odd", build=lambda p, c: QtWidgets.QLabel("o"),
                  refresh=lambda w, c, m: None,

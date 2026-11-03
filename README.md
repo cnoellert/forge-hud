@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.5.0)
+## The one Lens (`forge_lens.py`, 0.6.0)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -225,7 +225,11 @@ The window owns what the areas share, once:
   (`GMM_430 · V2` when a name repeats).
 - **The spine.** The cut, small, one painter: take colours fill (from the
   areas' overlays), tones never do; a preview's marks fill, outline, dash or
-  dim the rest, with a caption under it. Sized once per subject to the cut
+  dim the rest, with a caption under it. An overlay's `dim_rest` is a standing
+  filter: its shots stay lit, the rest draw at 0.22, the subject keeps its
+  outline, a preview takes over while hovered, and `Mark(None, None, "dim_rest")`
+  dims them all. `OLD_LOOK_COLOUR` is the reserved fill for a segment on an old
+  look; no take can wear it. Sized once per subject to the cut
   plus every area's `extent`, so a preview never grows it. Two ways to
   move in time: the playhead's line (and the tab on it) drags to scrub; a
   click on a segment puts the playhead on its first frame and pins the Lens

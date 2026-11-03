@@ -97,7 +97,7 @@ import sys
 import threading
 from collections import namedtuple
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -130,6 +130,10 @@ TONE = {"good": GOOD, "neutral": DIM, "info": BLUE, "warn": AMBER, "bad": BAD}
 TONES = ("good", "neutral", "info", "warn", "bad")
 #: Main's colour, as forge-takes draws it (Main has none stored).
 MAIN_COLOUR = "#6b7080"
+#: Reserved: a segment on an old look, one of a take's saved versions rather
+#: than its head. Outside forge-takes' colour band (saturation 0.44-0.72, value
+#: 0.53-0.70) on both counts, so no take, curated or generated, can wear it.
+OLD_LOOK_COLOUR = "#cfc4a6"
 #: A segment on the spine no area has coloured.
 UNCOLOURED = RAISED_RULE
 FOLDS = ("collapsed", "minimal", "expanded")
@@ -148,6 +152,10 @@ Seg = namedtuple("Seg", "key name track record_in record_out version kind")
 #: out) a ghost where a shot the cut no longer has used to be. A "band" is a
 #: thin bar in *colour* over the shot's span, ABOVE the tracks, in row *at*
 #: (an int, 0 nearest the tracks): forge-takes' groups, one row per take.
+#: "dim_rest" from a preview lights its shot with a stroke and dims the rest;
+#: from an overlay it is a standing filter, lit without a stroke, the rest
+#: dimmed, until the overlay stops saying so. A key of None lights nothing:
+#: every segment dimmed, a filter with no members in this cut.
 Mark = namedtuple("Mark", "key colour style at", defaults=(None, "outline", None))
 #: One verb's result on one shot: label as the area says it, signature the
 #: shot's resulting stack -- tuple((type, bypassed, fxprint), ...).
@@ -2149,6 +2157,7 @@ else:
             self.fills = {}
             self.marks = []
             self.bands = []           # the areas' band marks (overlay)
+            self.lit = None           # the overlays' filter: keys lit, or None
             self.band_rows = 0        # rows held for them
             self._extents = ()
             self._press = False       # the playhead grabbed
@@ -2255,7 +2264,9 @@ else:
                 r = self._rect(s.track, s.record_in, s.record_out)
                 marked = styles.get(s.key, set())
                 c = _colour(fill_of.get(s.key, self.fills.get(s.key)))
-                if dim and not marked:
+                # any preview takes over from a standing filter while hovered
+                if (dim and not marked) if marks else \
+                        (self.lit is not None and s.key not in self.lit):
                     c.setAlphaF(0.22)
                 if s.kind == "fx_gap":
                     fill = QtGui.QColor(c)
@@ -2269,7 +2280,12 @@ else:
                 dashed = "dashed" in marked and not marked & {"outline", "dim_rest"}
                 if marked & {"outline", "dashed", "dim_rest"} or \
                         (not marks and s.key in self.subject):
-                    pen = QtGui.QPen(QtGui.QColor("#8a91a0") if dashed else white, 1.2)
+                    # white is lost on the reserved fill, the one light fill;
+                    # dimmed, or a gap's thin fill, the ground is dark again
+                    stroke = QtGui.QColor("#1b1d24") if (
+                        s.kind != "fx_gap" and c.alpha() == 255
+                        and c.valueF() > 0.75) else white
+                    pen = QtGui.QPen(QtGui.QColor("#8a91a0") if dashed else stroke, 1.2)
                     if dashed:
                         pen.setStyle(QtCore.Qt.DashLine)
                     p.setPen(pen)
@@ -2633,6 +2649,7 @@ else:
             self.spine.subject = set(s.key for s in ctx.segments)
             fills = {}
             bands = []
+            lit = None
             extents = []
             for area_id in _anchor()["order"]:
                 if area_id not in self.frames or not _on_tab(area_id, self.tab):
@@ -2645,12 +2662,15 @@ else:
                         fills[m.key] = m.colour
                     elif m.style == "band":
                         bands.append(m)
+                    elif m.style == "dim_rest":
+                        lit = (lit or set()) | {m.key}
                 if hold:
                     e = self._call(area_id, "extent", ctx)
                     if e:
                         extents.append(tuple(e))
             self.spine.fills = fills
             self.spine.bands = bands
+            self.spine.lit = lit
             # band rows come from the overlays only: a preview never grows it
             rows = self.spine.band_rows_for(bands)
             if rows != self.spine.band_rows:
