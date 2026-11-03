@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.6.0)
+## The one Lens (`forge_lens.py`, 0.6.1)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -237,8 +237,8 @@ The window owns what the areas share, once:
 - **The window.** forge-streams' `LensWindow` chrome, moved here: a
   frameless `Qt.Tool`, dragged by its header, sized by outline grips applied
   on release, narrow or wide, each placed where it was last left; hidden
-  off its tabs and back; off the keyboard; areas stacked, each collapsed,
-  minimal or expanded, with a chip each to jump to it or bring it back.
+  off its tabs and back; off the keyboard; areas stacked, each collapsed or
+  expanded, with a chip each to jump to it or bring it back.
 - **The crash rules.** No timer of its own; no event filters but the
   host's (`on_release`, `on_double`, the pen watch feeding forge_hud's pen
   log); verbs through `later()`; disk through `read()`, whose answer comes

@@ -97,7 +97,7 @@ import sys
 import threading
 from collections import namedtuple
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -136,7 +136,9 @@ MAIN_COLOUR = "#6b7080"
 OLD_LOOK_COLOUR = "#cfc4a6"
 #: A segment on the spine no area has coloured.
 UNCOLOURED = RAISED_RULE
-FOLDS = ("collapsed", "minimal", "expanded")
+#: A saved "minimal" (it drew the same as expanded, Chris dropped it) reads as
+#: expanded.
+FOLDS = ("collapsed", "expanded")
 NARROW_WIDTH = 340
 
 
@@ -1707,15 +1709,14 @@ else:
                     p.drawLine(QtCore.QPointF(s - k, s), QtCore.QPointF(s, s - k))
 
     class _FoldMark(QtWidgets.QAbstractButton):
-        """One of an area's three marks, painted -- pipeline's: a dash for
-        collapsed, three lines for minimal, a box with lines for expanded."""
+        """One of an area's two marks, painted -- pipeline's: a dash for
+        collapsed, a box with lines for expanded."""
 
         def __init__(self, fold, current):
             QtWidgets.QAbstractButton.__init__(self)
             self.fold, self.current = fold, current
             self.setFixedSize(20, 16)
-            self.setToolTip({"collapsed": "Collapse to one line", "minimal": "A row per card",
-                             "expanded": "Every card in full"}[fold])
+            self.setToolTip({"collapsed": "Collapse to one line", "expanded": "Open"}[fold])
 
         def paintEvent(self, _event):                # noqa: N802
             p = QtGui.QPainter(self)
@@ -1727,9 +1728,6 @@ else:
             cx, cy = self.width() / 2, self.height() / 2
             if self.fold == "collapsed":
                 p.drawLine(QtCore.QPointF(cx - 5, cy), QtCore.QPointF(cx + 5, cy))
-            elif self.fold == "minimal":
-                for dy in (-3.5, 0, 3.5):
-                    p.drawLine(QtCore.QPointF(cx - 5, cy + dy), QtCore.QPointF(cx + 5, cy + dy))
             else:
                 p.drawRect(QtCore.QRectF(cx - 6, cy - 5, 12, 10))
                 for dy in (-1.5, 1.5):

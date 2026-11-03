@@ -522,6 +522,27 @@ _h, _s, _v = colorsys.rgb_to_hsv(*fl._colour(fl.OLD_LOOK_COLOUR).getRgbF()[:3])
 check("no take can wear the reserved fill: saturation and value both off the band",
       _s < 0.44 and _v > 0.70)
 
+# two folds: a mark each, the title toggles, a saved "minimal" reads as expanded
+_folded = win.frames["takes.takes"]
+_folded.set_fold("expanded")
+check("an area has two marks, collapsed and expanded",
+      [m.fold for m in _folded._marks] == ["collapsed", "expanded"])
+_folded.cycle()
+pump()
+check("the title collapses it", _folded.fold == "collapsed" and not _folded.content.isVisible())
+_folded.cycle()
+pump()
+check("and opens it again", _folded.fold == "expanded" and _folded.content.isVisible())
+_saved = fl._load_state().get("fold") or {}
+_saved.setdefault(win.mode, {})["takes.takes"] = "minimal"
+fl._save_state(fold=_saved)
+check("a saved minimal reads as expanded", _folded.fold == "expanded")
+_folded.cycle()
+pump()
+check("and the next click collapses it, nothing raised", _folded.fold == "collapsed")
+_folded.set_fold("expanded")
+pump()
+
 # a mark from a newer area, or a broken one, is skipped -- never raised
 fl.register_area("probe.odd", "Odd", build=lambda p, c: QtWidgets.QLabel("o"),
                  refresh=lambda w, c, m: None,
