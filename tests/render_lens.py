@@ -246,6 +246,68 @@ fl._beat("Timeline")
 pump()
 check("back on its tab", win.isVisible())
 
+# a tab of its own: an area on Batch shows there alone, with no timeline read
+batch_asks = []
+batch_tabs = []
+fl.register_area("probe.batch", "Batch", build=lambda p, c: QtWidgets.QLabel("graph"),
+                 refresh=lambda w, c, m: (batch_asks.append(c.asked), batch_tabs.append(c.tab)),
+                 tabs=("Batch",), overlay=lambda c: [fl.Mark("GMM_400", "#123456", "fill")],
+                 wide=True)
+pump()
+check("a Batch area on the Timeline: not shown, not refreshed, off the spine",
+      not win.frames["probe.batch"].isVisible() and not batch_asks
+      and "#123456" not in win.spine.fills.values())
+t_rect = win.geometry()
+t_uid, t_frame = win.follower.uid, seq.current_time.frame
+t_subject = win.follower.ctx.subject()
+walks = []
+real_sequence = win.follower.tl.sequence
+win.follower.tl.sequence = lambda: (walks.append(1), real_sequence())[1]
+fl._beat("Batch")
+pump()
+check("on Batch: the window stays, its area alone shows, asked why",
+      win.isVisible() and win.tab == "Batch" and win.frames["probe.batch"].isVisible()
+      and not win.frames["streams.versions"].isVisible() and batch_asks == ["tab"]
+      and batch_tabs == ["Batch"])
+check("on Batch: no spine, no caption, no subject, no follow button",
+      not win.spine.isVisible() and not win._cap_box.isVisible()
+      and not win._subject.isVisible() and not win._follow_btn.isVisible())
+fl._beat("Batch")
+fl._beat("Batch")
+check("on Batch: the Timeline is never read, the area not refreshed per beat",
+      not walks and win.follower.ctx.tab == "Batch" and not win.follower.ctx.segments
+      and batch_asks == ["tab"])
+win.setGeometry(40, 50, 330, 500)
+win.set_mode("wide")
+wide_batch = win.mode
+win.setGeometry(60, 70, 1000, 500)
+win.remember()
+fl._beat("Timeline")
+pump()
+win.follower.tl.sequence = real_sequence
+check("back on the Timeline: its own place and layout, the subject kept",
+      win.tab == "Timeline" and win.geometry() == t_rect and win.mode == "narrow"
+      and wide_batch == "wide" and win.follower.ctx.subject() == t_subject
+      and win.spine.isVisible() and win.frames["streams.versions"].isVisible()
+      and not win.frames["probe.batch"].isVisible())
+fl._beat("Media")
+check("through a tab it isn't on: hidden", not win.isVisible())
+fl._beat("Batch")
+pump()
+check("to Batch from there: Batch's own place and layout",
+      win.isVisible() and win.tab == "Batch" and win.mode == "wide"
+      and win.geometry() == QtCore.QRect(60, 70, 1000, 500))
+host = fl.host("probe.batch")
+check("the host's surface: a real parent, its width, its metrics, whether it shows",
+      host.window() is win and host.width() == win.frames["probe.batch"].width()
+      and host.fontMetrics().height() > 0 and host.isVisible())
+win.set_mode("narrow")
+fl._beat("Timeline")
+fl.unregister_area("probe.batch")
+pump()
+check("the Batch area gone: Batch isn't a Lens tab again",
+      "Batch" not in fl._tabs() and win.isVisible())
+
 # a click in the timeline: GMM_230 (V1) selected
 g230 = seq.seg("GMM_230")
 g230.selected = True

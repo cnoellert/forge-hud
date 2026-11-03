@@ -45,6 +45,13 @@
 #       tools=(),                # header tools: [(label, menu_fn, tone_fn)]
 #       follows=(),              # area ids whose update() refreshes this one
 #       wide=False)              # may this area draw wide
+#
+# tabs: an area shows and is refreshed on its own tabs only, and the window is
+# up on any area's. A tab outside CUT_TABS (Batch) has no spine, caption,
+# subject or follow button and never reads the Timeline: ctx.tab says where,
+# the area reads its own subject and calls update() when it changes. Each tab
+# keeps its own layout and place. Coming to a tab refreshes its areas, asked
+# "tab".
 #   forge_lens.open() / toggle() / close() / is_open()
 #   forge_lens.opener_installed()  # True: FORGE > One Lens… and the rail's
 #                                  # One Lens… open it -- drop your own entry
@@ -54,7 +61,7 @@
 #   with forge_lens.hold(): ...  # a tool acting on the Timeline: ignore it till done
 #
 # refresh(widget, ctx, mode): ctx.asked says why -- "subject", "settled",
-# "refresh", "update", "layout", "fold" or "build" (ASKED). An area that
+# "refresh", "update", "layout", "fold", "build" or "tab" (ASKED). An area that
 # reads from disk only on some redraws on the rest.
 #   forge_lens.update(area_id)   # this area's state changed (None = all)
 #   forge_lens.preview(area_id, marks | None, caption=None)
@@ -90,7 +97,7 @@ import sys
 import threading
 from collections import namedtuple
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -100,6 +107,8 @@ READ_WAIT = 5.0
 
 #: The tabs the window belongs on when no area says otherwise.
 DEFAULT_TABS = ("Timeline",)
+#: The tabs that have a cut: the follower reads and the spine shows only here.
+CUT_TABS = ("Timeline",)
 
 # FORGE family colours (forge-streams ui_lens / ui_seglens, forge-takes).
 EMBER = "#E87E24"
@@ -181,9 +190,10 @@ class Ctx(object):
 #: Why an area is refreshed (ctx.asked): the subject moved (or the sequence);
 #: it settled; Refresh; update() of it or of an area it follows; the window
 #: went narrow/wide; its fold changed; it was just built (registered, or
-#: re-registered live). An area that reads only on some of these redraws on
-#: the rest -- and treats a value it doesn't know as a reason to read.
-ASKED = ("subject", "settled", "refresh", "update", "layout", "fold", "build")
+#: re-registered live); the window came to this area's tab. An area that reads
+#: only on some of these redraws on the rest -- and treats a value it doesn't
+#: know as a reason to read.
+ASKED = ("subject", "settled", "refresh", "update", "layout", "fold", "build", "tab")
 
 
 # --- process-global anchor (survives reloads) -------------------------------
@@ -762,6 +772,13 @@ class Follower(object):
         self.click, self._click_frame = key, frame
         self._click_seen, self._click_wait = False, 0
 
+    def away(self, tab):
+        """On a tab with no cut: nothing is read from the Timeline, and what
+        was followed (the pin, the click, the subject) waits for the return.
+        Areas there get ctx.tab and an empty subject."""
+        if self.ctx.tab != tab or self.ctx.sequence is not None:
+            self.ctx = Ctx(tab=tab)
+
     def tick(self, tab=None):
         seq = self.tl.sequence()
         if seq is None:
@@ -900,6 +917,21 @@ def _tabs():
     for aid in st["order"]:
         tabs.update(st["areas"].get(aid, {}).get("tabs") or ())
     return tabs or set(DEFAULT_TABS)
+
+
+def _on_tab(area_id, tab):
+    """Whether *area_id* belongs on *tab*: an area shows and is refreshed on
+    its own tabs only. No tabs given: on all of the window's."""
+    tabs = (_anchor()["areas"].get(area_id) or {}).get("tabs") or ()
+    return not tabs or tab is None or tab in tabs
+
+
+def _flame_tab():
+    try:
+        import flame              # noqa: PLC0415
+        return str(flame.get_current_tab())
+    except Exception:
+        return DEFAULT_TABS[0]
 
 
 def _guard_line(area_id, what, exc):
@@ -1050,6 +1082,7 @@ def open(timeline=None):            # noqa: A001 - the module's verb
         st["window"] = win
         win.build_areas()
     _listen()
+    win.set_tab(_flame_tab())
     win.beat(None, force=True)
     win.show()
     win.raise_()
@@ -1121,7 +1154,8 @@ def _let_go():
     if win is None:
         return
     try:
-        win.follower.rebaseline()
+        if win.tab in CUT_TABS:
+            win.follower.rebaseline()
     except Exception as exc:
         _pen("hold release failed: {0!r}".format(exc))
 
@@ -1184,6 +1218,8 @@ def _beat(tab):
             return
         if st.get("away"):
             st["away"] = False
+            if tab is not None:
+                win.set_tab(tab)      # before it shows: it lands where that tab's was left
             win.show()
         if held():
             st["held_beats"] = st.get("held_beats", 0) + 1
@@ -1849,6 +1885,19 @@ else:
         def _popout(self):
             return self._win._popout
 
+        def window(self):
+            """The Lens's window: the parent for an area's own popout or dialog."""
+            return self._win
+
+        def width(self):
+            return self._frame.width()
+
+        def fontMetrics(self):                      # noqa: N802
+            return self._frame.fontMetrics()
+
+        def isVisible(self):                        # noqa: N802
+            return self._frame.isVisible()
+
         def _pop(self, card, frame, what, note, paragraphs, title=None, mono=False):
             self._win.pop(self, card, frame, what, note, paragraphs, title=title, mono=mono)
 
@@ -2337,8 +2386,8 @@ else:
             self._moved = self._manual = False
             self._switching = False
             self._scrub_to = None
-            saved = _load_state().get("mode")
-            self.mode = saved if saved in ("narrow", "wide") else "narrow"
+            self.tab = _flame_tab()
+            self.mode = self._saved_mode()
             self.setWindowTitle("FORGE — Lens")
             self.setObjectName("lensnarrow")
             self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
@@ -2367,8 +2416,7 @@ else:
             self._follow_btn = self._button(bar, "", self._toggle_pin)
             self._mode_btn = self._button(bar, "", lambda: self.set_mode(
                 "wide" if self.mode == "narrow" else "narrow"))
-            refresh = self._button(bar, "Refresh", self.refresh_all)
-            refresh.setToolTip("Read the timeline and every area again")
+            self._refresh_btn = self._button(bar, "Refresh", self.refresh_all)
             close_btn = self._button(bar, "×", close, now=True)
             close_btn.setToolTip("Put the Lens away")
             self._subject = QtWidgets.QLabel("")
@@ -2384,7 +2432,7 @@ else:
             self._cap = _label("", "caption")
             self._cap.setTextFormat(QtCore.Qt.PlainText)
             self._cap.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-            cap = QtWidgets.QWidget()
+            cap = self._cap_box = QtWidgets.QWidget()
             cl = QtWidgets.QVBoxLayout(cap)
             cl.setContentsMargins(6, 0, 6, 0)
             cl.setSpacing(0)
@@ -2415,6 +2463,7 @@ else:
             outer.addWidget(self.scroll, 1)
             self._grips = [_Grip(self, left=True), _Grip(self, left=False)]
             self._said_follow()
+            self._apply_tab()
             self._apply_mode()
 
         def build_areas(self):
@@ -2459,8 +2508,8 @@ else:
             except Exception as exc:
                 _guard_line(area_id, "build", exc)
             frame.apply_fold()
-            frame.setVisible(area_id not in self.hidden())
-            self._empty.setVisible(not self.frames)
+            frame.setVisible(self.shows(area_id))
+            self._said_empty()
             self.chips()
             self.refresh_area(area_id, "build")
             self.paint_spine(hold=False)          # its overlay, now -- not next beat
@@ -2471,12 +2520,18 @@ else:
             if frame is not None:
                 self._stack.removeWidget(frame)
                 _drop(frame)
-            self._empty.setVisible(not self.frames)
+            self._said_empty()
             self.chips()
             self.paint_spine(hold=False)          # its marks gone with it
 
         def hidden(self):
             return set(_load_state().get("hidden") or ())
+
+        def shows(self, area_id):
+            return _on_tab(area_id, self.tab) and area_id not in self.hidden()
+
+        def _said_empty(self):
+            self._empty.setVisible(not any(_on_tab(a, self.tab) for a in self.frames))
 
         def set_hidden(self, area_id, on):
             hidden = self.hidden()
@@ -2484,7 +2539,7 @@ else:
             _save_state(hidden=sorted(hidden))
             frame = self.frames.get(area_id)
             if frame is not None:
-                frame.setVisible(not on)
+                frame.setVisible(self.shows(area_id))
             self.chips()
 
         def chips(self):
@@ -2495,7 +2550,7 @@ else:
                     _drop(item.widget())
             hidden = self.hidden()
             for area_id in _anchor()["order"]:
-                if area_id not in self.frames:
+                if area_id not in self.frames or not _on_tab(area_id, self.tab):
                     continue
                 chip = QtWidgets.QToolButton()
                 chip.setObjectName("chip")
@@ -2534,8 +2589,8 @@ else:
             the header, the spine and to the others. *asked*: why (ASKED),
             on ctx.asked for these calls only."""
             frame = self.frames.get(area_id)
-            if frame is None:
-                return
+            if frame is None or not _on_tab(area_id, self.tab):
+                return                             # read when the window comes to its tab
             ctx = self.follower.ctx
             host = self.hosts.get(area_id)
             mode = host.mode if host is not None else "narrow"
@@ -2570,6 +2625,8 @@ else:
         def paint_spine(self, hold=True):
             """The spine's marks: every area's overlay, then any preview.
             *hold*: resize it to the subject (only when the subject moves)."""
+            if self.tab not in CUT_TABS:
+                return
             ctx = self.follower.ctx
             self.spine.cut = ctx.cut
             self.spine.frame = ctx.frame
@@ -2578,7 +2635,7 @@ else:
             bands = []
             extents = []
             for area_id in _anchor()["order"]:
-                if area_id not in self.frames:
+                if area_id not in self.frames or not _on_tab(area_id, self.tab):
                     continue
                 for m in self._call(area_id, "overlay", ctx) or ():
                     m = _as_mark(m)
@@ -2619,6 +2676,17 @@ else:
         # -- the subject ----------------------------------------------------------
 
         def beat(self, tab, force=False, asked=None):
+            tab = tab or self.tab
+            if tab != self.tab:
+                self.set_tab(tab)
+                force, asked = True, asked or "tab"
+            if tab not in CUT_TABS:
+                self.follower.away(tab)
+                if force:
+                    self.close_popout()
+                    _anchor()["previews"].clear()
+                    self.update_areas(None, paint=False, asked=asked or "refresh")
+                return
             ctx, moved, settled, frame_moved = self.follower.tick(tab)
             if moved or force:
                 self.close_popout()
@@ -2763,12 +2831,49 @@ else:
             self.remember()
             self.close_popout()
             self.mode = mode
-            _save_state(mode=mode)
+            _save_state(**{self._place_key("mode"): mode})
             self._apply_mode()
             for frame in self.frames.values():
                 frame.head()
                 frame.apply_fold()
             self.update_areas(None, asked="layout")
+
+        def _place_key(self, name):
+            """Where a layout or placement is saved: per tab, as the two
+            standalone windows kept theirs. A tab with a cut keeps the plain
+            keys it has always had."""
+            return name if self.tab in CUT_TABS else "{0}.{1}".format(self.tab, name)
+
+        def _saved_mode(self):
+            saved = _load_state().get(self._place_key("mode"))
+            return saved if saved in ("narrow", "wide") else "narrow"
+
+        def set_tab(self, tab):
+            """The window comes to *tab*: that tab's areas, layout and place.
+            The areas are refreshed by the beat that follows."""
+            if tab == self.tab:
+                return
+            if self.isVisible():
+                self.remember()           # under the tab it is leaving
+            self.close_popout()
+            self.tab = tab
+            self.mode = self._saved_mode()
+            self._apply_tab()
+            self._apply_mode()
+            for frame in self.frames.values():
+                frame.head()
+                frame.apply_fold()
+
+        def _apply_tab(self):
+            cut = self.tab in CUT_TABS
+            for widget in (self.spine, self._cap_box, self._subject, self._follow_btn):
+                widget.setVisible(cut)
+            self._refresh_btn.setToolTip(
+                "Read the timeline and every area again" if cut else "Read every area again")
+            for area_id, frame in self.frames.items():
+                frame.setVisible(self.shows(area_id))
+            self._said_empty()
+            self.chips()
 
         def _apply_mode(self):
             narrow = self.mode == "narrow"
@@ -2785,7 +2890,7 @@ else:
                 self._switching = False
 
         def _placed(self):
-            saved = _load_state().get(self.mode)
+            saved = _load_state().get(self._place_key(self.mode))
             if isinstance(saved, list) and len(saved) == 4:
                 rect = QtCore.QRect(*[int(v) for v in saved])
                 if any(s.availableGeometry().intersects(rect)
@@ -2803,7 +2908,7 @@ else:
 
         def remember(self):
             g = self.geometry()
-            _save_state(**{self.mode: [g.x(), g.y(), g.width(), g.height()]})
+            _save_state(**{self._place_key(self.mode): [g.x(), g.y(), g.width(), g.height()]})
 
         # -- the window: painted, dragged and sized by hand, as the HUD is -----------
 
