@@ -1170,6 +1170,9 @@ def close():
     st["away"] = False
     win = st.get("window")
     if win is not None:
+        # No beats from here, so another sequence may be open by the time it
+        # opens again. On Effects, where nothing can check, it would hold this one.
+        win.follower.seq = None
         win.hide()
     _unlisten()
 

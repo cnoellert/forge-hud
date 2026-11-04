@@ -596,8 +596,26 @@ check("back on the Timeline: read again once, the pin back, the place the same",
       and win.follower.ctx.primary.key == "GMM_230" and win.tab == "Timeline"
       and win.geometry() == e_rect and win._follow_btn.isVisible()
       and win.spine.frame is not None)
+# closed, then opened on Effects: another sequence may be open, so it holds none
 win.follower.tl.walk = e_real_walk
 win.follower.pin_keys([])
+fl._beat("Timeline")
+fl.close()
+check("closed: no sequence held", fl.current_sequence() is None)
+flame.timeline.clip = None
+flame.get_current_tab = lambda: "Effects"
+fl.open()
+pump()
+check("opened on Effects after a close: nothing held, and it says what to do",
+      fl.current_sequence() is None and win.tab == "Effects"
+      and not win.follower.ctx.segments and win.follower.ctx.sequence is None
+      and "open the Lens on the Timeline" in win._subject.text())
+del flame.get_current_tab
+flame.timeline.clip = e_clip
+fl._beat("Timeline")
+pump()
+check("a beat on the Timeline: held again", fl.current_sequence() is seq
+      and win.tab == "Timeline" and win.isVisible())
 win._said_follow()
 fl.unregister_area("probe.effects")
 fl._beat("Timeline")
