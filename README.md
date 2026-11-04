@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.6.1)
+## The one Lens (`forge_lens.py`, 0.7.0)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -234,6 +234,13 @@ The window owns what the areas share, once:
   move in time: the playhead's line (and the tab on it) drags to scrub; a
   click on a segment puts the playhead on its first frame and pins the Lens
   there. Nothing moves on the press; Flame is moved on the idle queue.
+- **The Effects tab.** Flame's timeline reads nothing there, so the Lens holds
+  the cut it walked before the switch, and the segment open in Effects is the
+  subject, over a pin, following you if the playbar takes you to another, until
+  you return. It shares the Timeline's place. The
+  spine shows the cut but moves nothing, with no playhead line, and `ctx.frame`
+  is None. An area joins with `"Effects"` in its `tabs`, and reads the sequence
+  from `current_sequence()`, not `flame.timeline.clip`.
 - **The window.** forge-streams' `LensWindow` chrome, moved here: a
   frameless `Qt.Tool`, dragged by its header, sized by outline grips applied
   on release, narrow or wide, each placed where it was last left; hidden
@@ -259,6 +266,10 @@ Two things save an area from reaching into the window:
 - **`ctx.asked`** says why this refresh: `subject`, `settled`, `refresh`,
   `update`, `layout`, `fold` or `build`. An area that reads from disk only
   on some of them redraws on the rest, and reads on a value it doesn't know.
+- **`forge_lens.current_sequence()`** is the live `PySequence` the Lens last
+  walked, or None. On Effects it's the one held from before the switch.
+- **`forge_lens.on_double(widget, fn)`** works on any pen: Qt's double-click, or
+  two releases timed here. Qt reported almost none from the Plank iPad client.
 - **`forge_lens.segment(key)`** is the live `PySegment` from the Lens's last
   walk (Flame's thread), or `None` when the timeline was edited since:
   its name or record in no longer match.

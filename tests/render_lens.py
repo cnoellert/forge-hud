@@ -522,6 +522,144 @@ _h, _s, _v = colorsys.rgb_to_hsv(*fl._colour(fl.OLD_LOOK_COLOUR).getRgbF()[:3])
 check("no take can wear the reserved fill: saturation and value both off the band",
       _s < 0.44 and _v > 0.70)
 
+# the Effects tab: Flame's timeline reads nothing; the walked cut is held
+effects_asks = []
+fl.register_area("probe.effects", "On Effects", build=lambda p, c: QtWidgets.QLabel("e"),
+                 refresh=lambda w, c, m: effects_asks.append((c.asked, c.primary and c.primary.key,
+                                                              c.source, c.frame)),
+                 tabs=("Timeline", "Effects"))
+fl._beat("Timeline")
+pump()
+e_rect = win.geometry()
+e_mode = win.mode
+e_seq = seq.seg("GMM_400")
+e_clip, e_now = flame.timeline.clip, seq._now
+win.follower.pin_keys(["GMM_230"])
+fl._beat("Timeline")
+check("current_sequence: the sequence walked", fl.current_sequence() is seq)
+e_walks = []
+e_real_walk = win.follower.tl.walk
+win.follower.tl.walk = lambda s: (e_walks.append(1), e_real_walk(s))[1]
+flame.timeline.clip, flame.timeline.current_segment = None, None
+e_seq.selected = True
+del effects_asks[:]
+fl._beat("Effects")
+pump()
+check("on Effects: same place and layout, the spine and the cut still there",
+      win.tab == "Effects" and win.isVisible() and win.geometry() == e_rect
+      and win.mode == e_mode and win.spine.isVisible() and bool(win.spine.cut))
+check("on Effects: the open segment is the subject, over the pin, and says so",
+      win.follower.ctx.primary.key == "GMM_400" and win.follower.ctx.source == "effect"
+      and "open in Effects" in win._subject.text()
+      and effects_asks[-1] == ("tab", "GMM_400", "effect", None))
+check("on Effects: no follow button, no playhead line, a Timeline-only area hidden",
+      not win._follow_btn.isVisible() and win.spine.frame is None
+      and not win.frames["streams.versions"].isVisible()
+      and win.frames["probe.effects"].isVisible())
+check("on Effects: the sequence held", fl.current_sequence() is seq)
+win.grab().save(os.path.join(out, "lens_effects.png"))
+e_pin = list(win.follower.pinned)
+win.pick("GMM_230")
+win.focus("GMM_230")
+win.scrub(86600, done=True)
+fl.scrub(86600)
+pump()
+check("on Effects: the spine and the verbs move nothing and change no pin",
+      seq._now == e_now and win.follower.pinned == e_pin and win.follower.spine is False)
+seq._now = fakeflame.Time(e_now.frame + 7)
+del effects_asks[:]
+fl._beat("Effects")
+fl._beat("Effects")
+fl._beat("Effects")
+pump()
+check("on Effects: no walk, however many beats, and the subject settles once",
+      not e_walks and win.follower.ctx.settled
+      and [a[0] for a in effects_asks] == ["settled"])
+e_seq.selected = False
+seq.seg("GMM_230").selected = True
+del effects_asks[:]
+fl._beat("Effects")
+pump()
+check("on Effects, the open segment moves: the subject and the areas follow",
+      win.follower.ctx.primary.key == "GMM_230" and "GMM_230" in win._subject.text()
+      and effects_asks[:1] == [("subject", "GMM_230", "effect", None)])
+seq.seg("GMM_230").selected = False
+fl._beat("Effects")
+check("on Effects, none selected: the subject stays",
+      win.follower.ctx.primary.key == "GMM_230")
+seq._now = e_now
+flame.timeline.clip = e_clip
+fl._beat("Timeline")
+pump()
+check("back on the Timeline: read again once, the pin back, the place the same",
+      len(e_walks) == 1 and win.follower.ctx.source == "pin"
+      and win.follower.ctx.primary.key == "GMM_230" and win.tab == "Timeline"
+      and win.geometry() == e_rect and win._follow_btn.isVisible()
+      and win.spine.frame is not None)
+win.follower.tl.walk = e_real_walk
+win.follower.pin_keys([])
+win._said_follow()
+fl.unregister_area("probe.effects")
+fl._beat("Timeline")
+pump()
+
+# a double-click on any pen: Qt's, or two releases timed
+import time as _time
+from PySide6 import QtGui as _QtGui
+_pad = QtWidgets.QLabel("double")
+_pad.resize(100, 40)
+_said = []
+fl.on_release(_pad, lambda: _said.append("click"))
+fl.on_double(_pad, lambda: _said.append("double"))
+
+
+def _send(kind, x=10, button=QtCore.Qt.LeftButton):
+    pos = QtCore.QPointF(x, 10)
+    QtWidgets.QApplication.sendEvent(_pad, _QtGui.QMouseEvent(
+        kind, pos, pos, button,
+        QtCore.Qt.NoButton if kind == QtCore.QEvent.MouseButtonRelease else button,
+        QtCore.Qt.NoModifier))
+
+
+def _tap(x=10):
+    _send(QtCore.QEvent.MouseButtonPress, x)
+    _send(QtCore.QEvent.MouseButtonRelease, x)
+
+
+def _apart():
+    _time.sleep(QtWidgets.QApplication.doubleClickInterval() / 1000 + 0.05)
+    del _said[:]
+
+
+_apart()
+_tap()
+_tap()
+check("a pen's two taps, plain presses: a click, then the double", _said == ["click", "double"])
+_apart()
+_tap()
+_send(QtCore.QEvent.MouseButtonDblClick)
+_send(QtCore.QEvent.MouseButtonRelease)
+check("a mouse's double-click, Qt's: a click, then the double, once",
+      _said == ["click", "double"])
+_apart()
+_tap()
+_tap()
+_tap()
+check("a third tap starts again", _said == ["click", "double", "click"])
+_apart()
+_tap(10)
+_tap(80)
+check("two taps far apart: two clicks", _said == ["click", "click"])
+_apart()
+_tap()
+_time.sleep(QtWidgets.QApplication.doubleClickInterval() / 1000 + 0.05)
+_tap()
+check("two taps slow: two clicks", _said == ["click", "click"])
+_apart()
+_tap()
+_tap(150)
+check("a second release outside it: nothing more", _said == ["click"])
+
 # two folds: a mark each, the title toggles, a saved "minimal" reads as expanded
 _folded = win.frames["takes.takes"]
 _folded.set_fold("expanded")

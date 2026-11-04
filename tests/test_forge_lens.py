@@ -250,6 +250,69 @@ def test_selection_beats_the_playhead_and_a_click_ends_spine_follow():
 
 
 @needs_linktest2
+def test_on_effects_the_open_segment_leads_and_nothing_reads_the_timeline():
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    f, flame = follower(seq)
+    seq._now = fakeflame.Time(86450)
+    f.tick("Timeline")
+    f.pin_keys(["GMM_230"])
+    f.tick("Timeline")
+    walks = []
+    real_walk = f.tl.walk
+    f.tl.walk = lambda s: (walks.append(1), real_walk(s))[1]
+    flame.timeline.clip, flame.timeline.current_segment = None, None
+    seq.seg("GMM_400").selected = True
+    ctx, moved, settled, frame_moved = f.tick("Effects")
+    assert moved and not settled and not frame_moved
+    assert (ctx.tab, ctx.source, ctx.primary.key, ctx.sequence) == \
+        ("Effects", "effect", "GMM_400", seq.name)
+    assert ctx.frame is None and ctx.visible is None and ctx.over == ()
+    assert ctx.primary.version == "v01"
+    # the playhead moved in Effects: nothing follows, and the subject settles
+    seq._now = fakeflame.Time(86600)
+    f.tick("Effects")
+    ctx, moved, settled, _f = f.tick("Effects")
+    assert not moved and settled and ctx.settled and not walks
+    # the playbar dragged onto another segment: the open one moves, the subject with it
+    seq.seg("GMM_400").selected = False
+    seq.seg("GMM_450").selected = True
+    ctx, moved, _s, _f = f.tick("Effects")
+    assert moved and ctx.primary.key == "GMM_450" and ctx.source == "effect" and not ctx.settled
+    # nothing selected: it stays
+    seq.seg("GMM_450").selected = False
+    ctx, moved, _s, _f = f.tick("Effects")
+    assert not moved and ctx.primary.key == "GMM_450"
+    # home: the pin it waited for, the cut read again once
+    flame.timeline.clip = seq
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert moved and ctx.source == "pin" and ctx.primary.key == "GMM_230"
+    assert len(walks) == 1 and ctx.frame == 86600
+    f.tick("Timeline")
+    assert len(walks) == 1
+
+
+@needs_linktest2
+def test_on_effects_a_selection_leads_with_the_one_last_clicked():
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    f, flame = follower(seq)
+    g230, g400 = seq.seg("GMM_230"), seq.seg("GMM_400")
+    flame.timeline.current_segment = g400
+    f.tick("Timeline")
+    flame.timeline.clip, flame.timeline.current_segment = None, None
+    g230.selected = g400.selected = True
+    ctx, _m, _s, _f = f.tick("Effects")
+    assert ctx.primary.key == "GMM_400"
+    assert sorted(s.key for s in ctx.segments) == ["GMM_230", "GMM_400"]
+
+
+def test_on_effects_with_nothing_walked_the_subject_is_empty_and_no_sequence_is_held():
+    f, flame = follower(None)
+    ctx, moved, _s, _f = f.tick("Effects")
+    assert ctx.sequence is None and ctx.tab == "Effects" and not ctx.segments and f.seq is None
+    assert fl.current_sequence() is None
+
+
+@needs_linktest2
 def test_the_pin_holds_and_settled_comes_after_two_quiet_beats():
     seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
     f, _ = follower(seq)

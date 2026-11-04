@@ -95,9 +95,10 @@ import os
 import re
 import sys
 import threading
+import time
 from collections import namedtuple
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -108,7 +109,16 @@ READ_WAIT = 5.0
 #: The tabs the window belongs on when no area says otherwise.
 DEFAULT_TABS = ("Timeline",)
 #: The tabs that have a cut: the follower reads and the spine shows only here.
-CUT_TABS = ("Timeline",)
+CUT_TABS = ("Timeline", "Effects")
+#: Cut tabs where Flame's timeline reads nothing: flame.timeline.clip,
+#: current_segment and current_effect are all None on Effects [LIVE 2027.1,
+#: 2026-11-03, forge-takes]. The cut already walked is held, and a held
+#: segment's ``selected`` says which is open. It moves when the playbar, set to
+#: the whole timeline, is dragged onto another segment [LIVE, Chris: TST_010 to
+#: TST_020, selected followed]. The sequence's current_time is no playhead here:
+#: it stayed put on a drag in the segment range, and read the new segment's first
+#: frame after that drag, one reading. So no frame is read, and nothing moves.
+HELD_CUT_TABS = ("Effects",)
 
 # FORGE family colours (forge-streams ui_lens / ui_seglens, forge-takes).
 EMBER = "#E87E24"
@@ -169,7 +179,9 @@ class Ctx(object):
     objects: tab, sequence, sequence_uid, tags, segments, primary, source,
     pinned, settled, playing, frame, over, visible, shots (+ cut, in cut
     order), and asked -- why this refresh, set just before each area's
-    refresh / summary / effects (else None): one of ASKED."""
+    refresh / summary / effects (else None): one of ASKED. On a tab in
+    HELD_CUT_TABS: source "effect", the open segment the subject, and frame,
+    visible and over empty, as no playhead can be read there."""
 
     __slots__ = ("tab", "sequence", "sequence_uid", "tags", "segments", "primary",
                  "source", "pinned", "settled", "playing", "frame", "over",
@@ -728,6 +740,7 @@ class Follower(object):
         self.tl = timeline or Timeline()
         self.cut = Cut([])
         self.uid = None
+        self.seq = None               # the live sequence last walked
         self._clicked = None
         self.selection = []
         self.spine = False            # following the playhead by the spine's say
@@ -767,6 +780,7 @@ class Follower(object):
             return
         self._clicked = self.tl.clicked()
         self.uid = self.tl.uid(seq)
+        self.seq = seq
         self.cut = self.tl.walk(seq)
         self.selection = self.tl.selected(self.cut)
         self._walk_asked = False
@@ -789,13 +803,75 @@ class Follower(object):
         if self.ctx.tab != tab or self.ctx.sequence is not None:
             self.ctx = Ctx(tab=tab)
 
+    def _held(self, tab):
+        """A tab that holds the cut (HELD_CUT_TABS): the subject is the segment
+        open there, over a pin, which waits for the return [Chris, 2026-11-03:
+        "stay on the edited segment"], and it moves when the open segment does.
+        Reads only the held segments' ``selected``, so nothing is walked and no
+        playhead is read. With none selected, the subject stays what it was."""
+        if self.seq is None:
+            ctx = Ctx(tab=tab)
+            moved = self.ctx.subject() != ctx.subject() or self.ctx.sequence is not None
+            self.ctx = ctx
+            self._last = ctx.subject()
+            return ctx, moved, False, False
+        cut = self.cut
+        self._walk_asked = True       # an effect may change the cut: read it on the return
+        keys = self.tl.selected(cut)
+        if keys:
+            segs = [cut.by_key[k] for k in keys]
+            primary, segs = self._lead(segs, "selection", self._clicked)
+        else:
+            segs = [s for s in self.ctx.segments if s.key in cut.by_key]
+            primary = self.ctx.primary if segs else None
+        ctx = Ctx(tab=tab, sequence=cut.name, sequence_uid=self.uid, tags=cut.tags,
+                  segments=tuple(segs), primary=primary, source="effect",
+                  shots=cut.by_key, cut=tuple(cut.segs))
+        moved = ctx.subject() != self._last
+        return (ctx, moved) + self._settle(ctx, moved, False) + (False,)
+
+    def _lead(self, segs, source, clicked):
+        """(primary, segs): the one last clicked leads a selection, where it
+        is one of them, carrying its version."""
+        if not segs:
+            return None, segs
+        primary = None
+        if source == "selection" and clicked is not None:
+            primary = next((s for s in segs if (segment_base(s.key), s.record_in)
+                            == (clicked[0], clicked[1])), None)
+        primary = primary or segs[0]
+        obj = self.cut.objects.get(primary.key)
+        primary = primary._replace(version=self.tl.version_of(obj) if obj is not None
+                                   else None)
+        return primary, [primary if s.key == primary.key else s for s in segs]
+
+    def _settle(self, ctx, moved, playing):
+        """Records *ctx* as the subject; (settled_now,). settled: the same
+        subject AND a still playhead -- a drag or play inside one segment must
+        not settle it, or the flip comes while the areas that wait for a still
+        playhead won't read, and none comes when it stops [LIVE 2027.1,
+        2026-11-01: Depends stuck on "Reading..." after a positioner drag
+        across TST_040]."""
+        if moved or playing:
+            self._same = 0
+        else:
+            self._same += 1
+        self._last = ctx.subject()
+        was = self.ctx.settled
+        ctx.settled = self._same >= 2
+        self.ctx = ctx
+        return (bool(ctx.settled and not was),)
+
     def tick(self, tab=None):
+        if tab in HELD_CUT_TABS:
+            return self._held(tab)
         seq = self.tl.sequence()
         if seq is None:
             ctx = Ctx(tab=tab)
             moved = self.ctx.subject() != ctx.subject() or self.ctx.sequence is not None
-            self.ctx, self.uid = ctx, None
+            self.ctx, self.uid, self.seq = ctx, None, None
             return ctx, moved, False, False
+        self.seq = seq
         uid = self.tl.uid(seq)
         clicked = self.tl.clicked()
         first = uid != self.uid
@@ -842,17 +918,7 @@ class Follower(object):
         else:
             here = cut.under_playhead(frame, focus)
             segs, source = ([here] if here else []), "playhead"
-        primary = None
-        if segs:
-            # the one last clicked leads a selection, where it is one of them
-            if source == "selection" and clicked is not None:
-                primary = next((s for s in segs if (segment_base(s.key), s.record_in)
-                                == (clicked[0], clicked[1])), None)
-            primary = primary or segs[0]
-            obj = cut.objects.get(primary.key)
-            primary = primary._replace(version=self.tl.version_of(obj) if obj is not None
-                                       else None)
-            segs = [primary if s.key == primary.key else s for s in segs]
+        primary, segs = self._lead(segs, source, clicked)
         playing = (frame is not None and self._frame is not None
                    and abs(frame - self._frame) > 1)
         frame_moved = frame != self._frame
@@ -863,22 +929,8 @@ class Follower(object):
                   over=tuple(cut.over(primary, frame)) if primary else (),
                   visible=cut.under_playhead(frame, focus),
                   shots=cut.by_key, cut=tuple(cut.segs))
-        subject = ctx.subject()
-        moved = subject != self._last or first
-        if moved or playing:
-            # settled: the same subject AND a still playhead -- a drag or play
-            # inside one segment must not settle it, or the flip comes while
-            # the areas that wait for a still playhead won't read, and none
-            # comes when it stops [LIVE 2027.1, 2026-11-01: Depends stuck on
-            # "Reading..." after a positioner drag across TST_040]
-            self._same = 0
-        else:
-            self._same += 1
-        self._last = subject
-        was = self.ctx.settled
-        ctx.settled = self._same >= 2
-        self.ctx = ctx
-        return ctx, moved, bool(ctx.settled and not was), frame_moved
+        moved = ctx.subject() != self._last or first
+        return (ctx, moved) + self._settle(ctx, moved, playing) + (frame_moved,)
 
 
 # --- the registry -----------------------------------------------------------
@@ -1008,6 +1060,15 @@ def segment(key):
     except Exception:
         return None                   # a segment the edit deleted
     return obj
+
+
+def current_sequence():
+    """The live PySequence the Lens last walked -- Flame's thread. On a tab in
+    HELD_CUT_TABS, where flame.timeline.clip is None, it is the sequence held
+    from before the switch; on another tab it may be stale. None when there is
+    no window or nothing has been walked."""
+    win = _anchor().get("window")
+    return None if win is None else win.follower.seq
 
 
 def scrub(frame, done=True):
@@ -1541,18 +1602,36 @@ else:
         """A widget's click (acted on at release, inside it, left button)
         and double-click -- forge-streams' _DoubleClick, the host's own so
         areas never install a filter of theirs (r3). The release that ends a
-        double-click is no click."""
+        double-click is no click.
+
+        A double-click is also two releases, timed here: from a pen through
+        the Plank iPad client, Qt reported 1 of 99 quick double presses as a
+        double-click [LIVE 2027.1, 2026-11-03, /var/tmp/forge_pen.log]."""
 
         def __init__(self, parent):
             QtCore.QObject.__init__(self, parent)
             self.click = None
             self.double = None
             self._armed = False
+            self._last = None         # the last release: (when, where)
+
+        def _second(self, event):
+            """Is this release the second of a double-click? If not, it may be
+            the first."""
+            now, at = time.monotonic(), event.globalPosition()
+            last, self._last = self._last, (now, at)
+            if last is None or now - last[0] > QtWidgets.QApplication.doubleClickInterval() / 1000:
+                return False
+            if (at - last[1]).manhattanLength() > QtWidgets.QApplication.startDragDistance():
+                return False
+            self._last = None
+            return True
 
         def eventFilter(self, obj, event):           # noqa: N802
             kind = event.type()
             if kind == QtCore.QEvent.MouseButtonDblClick:
                 self._armed = False
+                self._last = None
                 if self.double is not None:
                     self.double()
                     return True
@@ -1560,9 +1639,13 @@ else:
                 self._armed = event.button() == QtCore.Qt.LeftButton
             elif kind == QtCore.QEvent.MouseButtonRelease and self._armed:
                 self._armed = False
-                if (self.click is not None and event.button() == QtCore.Qt.LeftButton
+                if (event.button() == QtCore.Qt.LeftButton
                         and obj.rect().contains(event.position().toPoint())):
-                    self.click()
+                    if self.double is not None and self._second(event):
+                        self.double()
+                        return True
+                    if self.click is not None:
+                        self.click()
             return False
 
     def _clicks(widget):
@@ -2339,7 +2422,7 @@ else:
             # armed only: nothing in Flame moves while the tip goes down
             _pen("spine press", event)
             event.accept()
-            if event.button() != QtCore.Qt.LeftButton:
+            if event.button() != QtCore.Qt.LeftButton or self.win.tab in HELD_CUT_TABS:
                 return
             QtWidgets.QToolTip.hideText()
             pos = event.position()
@@ -2360,6 +2443,8 @@ else:
             s = None if near else self.seg_at(pos)
             if near:
                 tip = "the playhead - drag to scrub"
+            elif s is not None and self.win.tab in HELD_CUT_TABS:
+                tip = s.name
             elif s is not None:
                 tip = "{0}\nclick: the playhead to its start, the Lens pinned on it".format(
                     s.name)
@@ -2728,7 +2813,7 @@ else:
             the playhead moves on -- even where the focused track would give
             another segment there."""
             seg = self.follower.cut.by_key.get(key)
-            if seg is None:
+            if seg is None or self.tab in HELD_CUT_TABS:
                 return
             self.follower.reveal(key, seg.record_in)
             self._move(seg.record_in)
@@ -2738,7 +2823,7 @@ else:
             the window pinned on it (the Takes Lens's click, forge-takes
             59b5b28). Unpin with the Pinned button."""
             seg = self.follower.cut.by_key.get(key)
-            if seg is None:
+            if seg is None or self.tab in HELD_CUT_TABS:
                 return
             self.follower.pin_keys([key])
             self._said_follow()
@@ -2748,6 +2833,8 @@ else:
             """The spine pressed and dragged: the positioner follows, on the
             idle queue, once per idle however many moves asked; the subject
             follows the playhead until the next click in the timeline."""
+            if self.tab in HELD_CUT_TABS:
+                return
             self.follower.follow_playhead()
             pending = self._scrub_to is not None
             self._scrub_to = frame
@@ -2783,12 +2870,15 @@ else:
             p = ctx.primary
             if p is None:
                 said = '<span style="color:#8a93a4;">{0}</span>'.format(
+                    "Nothing read yet: open the Lens on the Timeline first"
+                    if not ctx.sequence and self.tab in HELD_CUT_TABS else
                     "No sequence open in the Timeline" if not ctx.sequence else
                     "Nothing under the playhead")
             else:
                 more = len(ctx.segments) - 1
                 word = {"selection": "selected", "playhead": "at the playhead",
-                        "pin": "pinned", "click": "clicked"}.get(ctx.source, "")
+                        "pin": "pinned", "click": "clicked",
+                        "effect": "open in Effects"}.get(ctx.source, "")
                 said = '<b style="color:#e6e9ef;">{0}</b>{1}&nbsp;&nbsp;' \
                        '<span style="color:#8a93a4;">{2}</span>'.format(
                            _escape(p.name), " +{0}".format(more) if more > 0 else "", word)
@@ -2884,10 +2974,12 @@ else:
 
         def _apply_tab(self):
             cut = self.tab in CUT_TABS
-            for widget in (self.spine, self._cap_box, self._subject, self._follow_btn):
+            reads = cut and self.tab not in HELD_CUT_TABS   # the Timeline can be read here
+            for widget in (self.spine, self._cap_box, self._subject):
                 widget.setVisible(cut)
+            self._follow_btn.setVisible(reads)
             self._refresh_btn.setToolTip(
-                "Read the timeline and every area again" if cut else "Read every area again")
+                "Read the timeline and every area again" if reads else "Read every area again")
             for area_id, frame in self.frames.items():
                 frame.setVisible(self.shows(area_id))
             self._said_empty()
@@ -3018,7 +3110,8 @@ def on_release(widget, fn):
 
 
 def on_double(widget, fn):
-    """*fn* on a double-click of *widget*."""
+    """*fn* on a double-click of *widget*, on any pen: Qt's, or two releases
+    timed here. The first release is still a click."""
     if QtWidgets is not None:
         _clicks(widget).double = fn
 
