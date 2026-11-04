@@ -548,9 +548,9 @@ pump()
 check("on Effects: same place and layout, the spine and the cut still there",
       win.tab == "Effects" and win.isVisible() and win.geometry() == e_rect
       and win.mode == e_mode and win.spine.isVisible() and bool(win.spine.cut))
-check("on Effects: the open segment is the subject, over the pin, and says so",
+check("on Effects: the selected segment is the subject, over the pin, and says so",
       win.follower.ctx.primary.key == "GMM_400" and win.follower.ctx.source == "effect"
-      and "open in Effects" in win._subject.text()
+      and "selected in Effects" in win._subject.text()
       and effects_asks[-1] == ("tab", "GMM_400", "effect", None))
 check("on Effects: no follow button, no playhead line, a Timeline-only area hidden",
       not win._follow_btn.isVisible() and win.spine.frame is None

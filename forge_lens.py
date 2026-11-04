@@ -98,7 +98,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -113,9 +113,12 @@ CUT_TABS = ("Timeline", "Effects")
 #: Cut tabs where Flame's timeline reads nothing: flame.timeline.clip,
 #: current_segment and current_effect are all None on Effects [LIVE 2027.1,
 #: 2026-11-03, forge-takes]. The cut already walked is held, and a held
-#: segment's ``selected`` says which is open. It moves when the playbar, set to
-#: the whole timeline, is dragged onto another segment [LIVE, Chris: TST_010 to
-#: TST_020, selected followed]. The sequence's current_time is no playhead here:
+#: segment's ``selected`` is the best guess at which is open. It moves when the
+#: playbar, set to the whole timeline, is dragged onto another segment [LIVE,
+#: Chris: TST_010 to TST_020, selected followed]. It is not proof: a save_setup
+#: on another segment opened that segment's effect with ``selected`` left where
+#: it was [LIVE, forge-takes, TST_publish2], so nothing that writes may rely on
+#: it. The sequence's current_time is no playhead here:
 #: it stayed put on a drag in the segment range, and read the new segment's first
 #: frame after that drag, one reading. So no frame is read, and nothing moves.
 HELD_CUT_TABS = ("Effects",)
@@ -180,8 +183,9 @@ class Ctx(object):
     pinned, settled, playing, frame, over, visible, shots (+ cut, in cut
     order), and asked -- why this refresh, set just before each area's
     refresh / summary / effects (else None): one of ASKED. On a tab in
-    HELD_CUT_TABS: source "effect", the open segment the subject, and frame,
-    visible and over empty, as no playhead can be read there."""
+    HELD_CUT_TABS: source "effect", the segment selected there the subject (a
+    best guess at the one open: never write from it), and frame, visible and
+    over empty, as no playhead can be read there."""
 
     __slots__ = ("tab", "sequence", "sequence_uid", "tags", "segments", "primary",
                  "source", "pinned", "settled", "playing", "frame", "over",
@@ -805,8 +809,9 @@ class Follower(object):
 
     def _held(self, tab):
         """A tab that holds the cut (HELD_CUT_TABS): the subject is the segment
-        open there, over a pin, which waits for the return [Chris, 2026-11-03:
-        "stay on the edited segment"], and it moves when the open segment does.
+        selected there, the best guess at the one open (see HELD_CUT_TABS), over
+        a pin, which waits for the return [Chris, 2026-11-03: "stay on the
+        edited segment"], and it moves when the selection does.
         Reads only the held segments' ``selected``, so nothing is walked and no
         playhead is read. With none selected, the subject stays what it was."""
         if self.seq is None:
@@ -2878,7 +2883,7 @@ else:
                 more = len(ctx.segments) - 1
                 word = {"selection": "selected", "playhead": "at the playhead",
                         "pin": "pinned", "click": "clicked",
-                        "effect": "open in Effects"}.get(ctx.source, "")
+                        "effect": "selected in Effects"}.get(ctx.source, "")
                 said = '<b style="color:#e6e9ef;">{0}</b>{1}&nbsp;&nbsp;' \
                        '<span style="color:#8a93a4;">{2}</span>'.format(
                            _escape(p.name), " +{0}".format(more) if more > 0 else "", word)

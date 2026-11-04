@@ -197,7 +197,7 @@ Flame's thread. A consumer meeting an older 1.x checks
   it is the family's opener; a distro's own entry steps aside when
   `forge_lens.opener_installed()` says so.
 
-## The one Lens (`forge_lens.py`, 0.7.0)
+## The one Lens (`forge_lens.py`, 0.7.1)
 
 A second module beside the rail, for forge-hud#1: **one window that each
 distro registers *areas* into** — Takes (forge-takes), Versions and Depends
@@ -235,9 +235,11 @@ The window owns what the areas share, once:
   click on a segment puts the playhead on its first frame and pins the Lens
   there. Nothing moves on the press; Flame is moved on the idle queue.
 - **The Effects tab.** Flame's timeline reads nothing there, so the Lens holds
-  the cut it walked before the switch, and the segment open in Effects is the
+  the cut it walked before the switch, and the segment selected in Effects is the
   subject, over a pin, following you if the playbar takes you to another, until
-  you return. It shares the Timeline's place. The
+  you return. That's the best guess at the one open, not proof: Flame can open
+  another effect without the selection moving, so never write from it. It shares
+  the Timeline's place. The
   spine shows the cut but moves nothing, with no playhead line, and `ctx.frame`
   is None. An area joins with `"Effects"` in its `tabs`, and reads the sequence
   from `current_sequence()`, not `flame.timeline.clip`.
