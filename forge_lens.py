@@ -44,7 +44,8 @@
 #       effects=None,            # (ctx) -> {shot_key: [Effect]}: cross-reading
 #       tools=(),                # header tools: [(label, menu_fn, tone_fn)]
 #       follows=(),              # area ids whose update() refreshes this one
-#       wide=False)              # may this area draw wide
+#       wide=False,              # may this area draw wide
+#       on_pin=None)             # (mark) -> None: one of its pins clicked
 #
 # tabs: an area shows and is refreshed on its own tabs only, and the window is
 # up on any area's. A tab outside CUT_TABS (Batch) has no spine, caption,
@@ -98,7 +99,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.7.4"
+__version__ = "0.8.0"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -171,6 +172,14 @@ Seg = namedtuple("Seg", "key name track record_in record_out version kind")
 #: from an overlay it is a standing filter, lit without a stroke, the rest
 #: dimmed, until the overlay stops saying so. A key of None lights nothing:
 #: every segment dimmed, a filter with no members in this cut.
+#: A "pin" (0.8.0) sits at record frames, not over a shot: at a frame (an
+#: int) or a range (first, last), both included like Seg.record_in/out; key
+#: the shot it is on, so a dimmed shot dims its pins. Drawn in a lane of its
+#: own above the bands -- a tick at a frame, a thin bar over a range; the
+#: lane is held while an overlay has pins, and a preview's pins draw taller
+#: and outlined (the one selected or hovered), never growing it. A click on
+#: one moves the playhead to its first frame (key the subject, as focus())
+#: and hands the Mark to its area's on_pin. Courier's notes: one pin a frame.
 Mark = namedtuple("Mark", "key colour style at", defaults=(None, "outline", None))
 #: One verb's result on one shot: label as the area says it, signature the
 #: shot's resulting stack -- tuple((type, bypassed, fxprint), ...).
@@ -959,11 +968,12 @@ class Follower(object):
 
 def register_area(area_id, title, build, refresh, tabs=DEFAULT_TABS, summary=None,
                   overlay=None, extent=None, effects=None, tools=(), follows=(),
-                  wide=False):
+                  wide=False, on_pin=None):
     """Add or replace an area. Safe at import time (no Qt is touched); a
     second call with the same id swaps the callbacks and rebuilds that
     area's widget in a live window -- its old class may belong to a purged
-    module."""
+    module. *on_pin(mark)*: one of the area's overlay pins was clicked, on
+    the idle queue, after the playhead was sent to it."""
     st = _anchor()
     if area_id not in st["order"]:
         st["order"].append(area_id)
@@ -971,7 +981,7 @@ def register_area(area_id, title, build, refresh, tabs=DEFAULT_TABS, summary=Non
         "title": title, "build": build, "refresh": refresh,
         "tabs": tuple(tabs) if tabs else (), "summary": summary, "overlay": overlay,
         "extent": extent, "effects": effects, "tools": tuple(tools or ()),
-        "follows": tuple(follows or ()), "wide": bool(wide)}
+        "follows": tuple(follows or ()), "wide": bool(wide), "on_pin": on_pin}
     win = st.get("window")
     if win is not None:
         try:
@@ -1490,6 +1500,18 @@ def _drop(widget):
     widget.hide()
     widget.deleteLater()
 
+
+
+def _pin_span(m):
+    """A pin's (first, last) record frames, or None when its *at* is
+    neither a frame nor a (first, last) pair."""
+    at = m.at
+    if isinstance(at, int) and not isinstance(at, bool):
+        return (at, at)
+    if isinstance(at, (tuple, list)) and len(at) == 2 and all(
+            isinstance(f, int) and not isinstance(f, bool) for f in at):
+        return (min(at), max(at))
+    return None
 
 
 def _as_mark(m):
@@ -2254,6 +2276,10 @@ else:
         BAND, BAND_GAP, BANDS = 4, 2, 4
         #: room between the last band row and the tracks, a line across it
         SPLIT = 5
+        #: the pin lane, over the bands: a tick PIN_W wide and PIN tall, a
+        #: range a PIN_BAR bar at the lane's foot; a preview's (the one
+        #: selected or hovered) PIN_HI tall and outlined -- the lane's height
+        PIN, PIN_HI, PIN_W, PIN_BAR, PIN_BAR_HI = 8, 12, 5, 3, 5
         #: How near the playhead's line a press grabs it, in pixels -- room
         #: for a pen (forge-takes' GRAB).
         GRAB = 5
@@ -2269,11 +2295,15 @@ else:
             self.fills = {}
             self.marks = []
             self.bands = []           # the areas' band marks (overlay)
+            self.pins = []            # the areas' pins: [(area_id, Mark)] (overlay)
+            self.pin_lane = False     # the lane held for them
             self.lit = None           # the overlays' filter: keys lit, or None
             self.band_rows = 0        # rows held for them
             self._extents = ()
             self._press = False       # the playhead grabbed
             self._down = None         # the segment pressed, acted on at release
+            self._down_pin = None     # the pin pressed: (area_id, Mark)
+            self._hover_pin = None    # the pin under the pointer: (area_id, Mark)
             self._lit = False         # the line can be grabbed
             self.hold(())
 
@@ -2292,11 +2322,16 @@ else:
                                 + (tracks - 1) * self.GAP)
             self.update()
 
+        def _lane(self):
+            """The height the pin lane takes, over the bands."""
+            return (self.PIN_HI + self.BAND_GAP) if self.pin_lane else 0
+
         def _top(self):
-            """The height the band rows take over the tracks, with the
-            split between them and the cut."""
+            """The height the pin lane and the band rows take over the
+            tracks, with the split between them and the cut."""
             n = min(self.band_rows, self.BANDS)
-            return n * (self.BAND + self.BAND_GAP) + (self.SPLIT if n else 0)
+            above = self._lane() + n * (self.BAND + self.BAND_GAP)
+            return above + (self.SPLIT if above else 0)
 
         def band_rows_for(self, marks):
             rows = [m.at for m in marks if m.style == "band" and isinstance(m.at, int)
@@ -2336,7 +2371,7 @@ else:
                 if s is None:
                     continue
                 x0, x1 = self._x(s.record_in), self._x(s.record_out + 1)
-                y = self.PAD + (n - 1 - m.at) * (self.BAND + self.BAND_GAP)
+                y = self.PAD + self._lane() + (n - 1 - m.at) * (self.BAND + self.BAND_GAP)
                 p.fillRect(QtCore.QRectF(x0, y, max(x1 - x0 - 1, 1.5), self.BAND),
                            _colour(m.colour))
             if hidden:
@@ -2350,6 +2385,64 @@ else:
                 p.fillRect(r, QtGui.QColor(PANEL))
                 p.setPen(QtGui.QColor("#aab2c2"))
                 p.drawText(r, QtCore.Qt.AlignCenter, text)
+
+        def _pin_rect(self, m, hi=False):
+            """Where pin *m* draws: a tick at a frame, a bar over a range,
+            standing on the lane's foot; *hi* the taller, outlined one. None
+            off the lane or outside the span."""
+            span = _pin_span(m)
+            first, last, _t = self.span
+            if not self.pin_lane or span is None or span[1] < first or span[0] > last:
+                return None
+            a, b = max(span[0], first), min(span[1], last)
+            foot = self.PAD + self.PIN_HI
+            x0, x1 = self._x(a), self._x(b + 1)
+            if span[0] == span[1]:
+                h = self.PIN_HI if hi else self.PIN
+                w = self.PIN_W + (2 if hi else 0)
+                cx = (x0 + x1) / 2.0
+                return QtCore.QRectF(cx - w / 2.0, foot - h, w, h)
+            h = self.PIN_BAR_HI if hi else self.PIN_BAR
+            return QtCore.QRectF(x0, foot - h, max(x1 - x0 - 1, 1.5), h)
+
+        def _paint_pins(self, p, dimmed):
+            if not self.pin_lane:
+                return
+            hover = self._hover_pin[1] if self._hover_pin else None
+            hi = [m for m in self.marks if m.style == "pin"]
+            if hover is not None:
+                hi.append(hover)
+            for m, emph in [(m, False) for _a, m in self.pins] + [(m, True) for m in hi]:
+                r = self._pin_rect(m, emph)
+                if r is None:
+                    continue
+                c = _colour(m.colour, EMBER)
+                if m.key is not None and m.key in dimmed and not emph:
+                    c.setAlphaF(0.35)
+                p.fillRect(r, c)
+                if emph:
+                    p.setPen(QtGui.QPen(QtGui.QColor("#eef0f4"), 1.2))
+                    p.setBrush(QtCore.Qt.NoBrush)
+                    p.drawRect(r.adjusted(-0.6, -0.6, 0.6, 0.6))
+
+        def pin_at(self, pos):
+            """The overlay pin nearest *pos* in the lane, within GRAB: an
+            (area_id, Mark), or None."""
+            if not self.pin_lane or not (self.PAD - 2 <= pos.y()
+                                         <= self.PAD + self.PIN_HI + self.BAND_GAP):
+                return None
+            best, near = None, None
+            for area_id, m in self.pins:
+                r = self._pin_rect(m)
+                if r is None:
+                    continue
+                if r.left() - self.GRAB <= pos.x() <= r.right() + self.GRAB:
+                    d = 0 if r.left() <= pos.x() <= r.right() else \
+                        min(abs(pos.x() - r.left()), abs(pos.x() - r.right()))
+                    d += 0.001 * r.width()        # a tick over the range it sits in
+                    if near is None or d < near:
+                        best, near = (area_id, m), d
+            return best
 
         def paintEvent(self, _event):                # noqa: N802
             p = QtGui.QPainter(self)
@@ -2369,7 +2462,9 @@ else:
                 p.drawLine(QtCore.QPointF(self.PAD, y), QtCore.QPointF(self.PAD + width, y))
             # a shot's marks merged: its fill colour, and how it is stroked
             fill_of, styles = {}, {}
-            marks = [m for m in self.marks if m.style != "band"]
+            # pins are the lane's: a pin preview leaves the shots as they were
+            marks = [m for m in self.marks if m.style not in ("band", "pin")]
+            dimmed = set()
             for m in marks:
                 if m.at is not None:
                     continue
@@ -2386,6 +2481,7 @@ else:
                 if (dim and not marked) if marks else \
                         (self.lit is not None and s.key not in self.lit):
                     c.setAlphaF(0.22)
+                    dimmed.add(s.key)
                 if s.kind == "fx_gap":
                     fill = QtGui.QColor(c)
                     fill.setAlphaF(c.alphaF() * 0.35)
@@ -2409,6 +2505,7 @@ else:
                     p.setPen(pen)
                     p.setBrush(QtCore.Qt.NoBrush)
                     p.drawRect(r.adjusted(0.6, 0.6, -0.6, -0.6))
+            self._paint_pins(p, dimmed)
             for m in marks:
                 # a ghost only where at is (track, in, out): a style or an
                 # at this spine doesn't know (a newer area's) is skipped
@@ -2459,10 +2556,15 @@ else:
             # armed only: nothing in Flame moves while the tip goes down
             _pen("spine press", event)
             event.accept()
-            if event.button() != QtCore.Qt.LeftButton or self.win.tab in HELD_CUT_TABS:
+            if event.button() != QtCore.Qt.LeftButton:
                 return
             QtWidgets.QToolTip.hideText()
             pos = event.position()
+            # a pin over the line: the line is still grabbed by its tab or
+            # down in the tracks. On a held tab a pin still tells its area.
+            self._down_pin = self.pin_at(pos)
+            if self._down_pin is not None or self.win.tab in HELD_CUT_TABS:
+                return
             if self.near_line(pos.x()):
                 self._press = True    # the playhead, grabbed: no jump
                 self.update()
@@ -2475,10 +2577,20 @@ else:
             if self._press:
                 self.win.scrub(self._frame_at(pos.x()))
                 return
-            near = self.near_line(pos.x())
+            pin = self.pin_at(pos)
+            if pin != self._hover_pin:
+                self._hover_pin = pin
+                self.update()
+            near = pin is None and self.near_line(pos.x())
             self._light(near)
-            s = None if near else self.seg_at(pos)
-            if near:
+            s = None if near or pin is not None else self.seg_at(pos)
+            if pin is not None:
+                span = _pin_span(pin[1])
+                title = (_anchor()["areas"].get(pin[0]) or {}).get("title") or pin[0]
+                where = str(span[0]) if span[0] == span[1] else "{0}-{1}".format(*span)
+                tip = "{0} · frame {1}".format(title, where) if self.win.tab in HELD_CUT_TABS \
+                    else "{0} · frame {1}\nclick: the playhead to it".format(title, where)
+            elif near:
                 tip = "the playhead - drag to scrub"
             elif s is not None and self.win.tab in HELD_CUT_TABS:
                 tip = s.name
@@ -2491,6 +2603,9 @@ else:
 
         def leaveEvent(self, _event):                # noqa: N802
             self._light(False)
+            if self._hover_pin is not None:
+                self._hover_pin = None
+                self.update()
 
         def mouseReleaseEvent(self, event):          # noqa: N802
             _pen("spine release", event)
@@ -2500,6 +2615,11 @@ else:
                 self._press = False
                 self.win.scrub(self._frame_at(event.position().x()), done=True)
                 self.update()
+                return
+            pin, self._down_pin = self._down_pin, None
+            if pin is not None:
+                if self.pin_at(event.position()) == pin:
+                    self.win.pin_clicked(*pin)    # a press that wandered off does nothing
                 return
             key, self._down = self._down, None
             s = self.seg_at(event.position())
@@ -2776,7 +2896,7 @@ else:
             self.spine.frame = ctx.frame
             self.spine.subject = set(s.key for s in ctx.segments)
             fills = {}
-            bands = []
+            bands, pins = [], []
             lit = None
             extents = []
             for area_id in _anchor()["order"]:
@@ -2790,6 +2910,9 @@ else:
                         fills[m.key] = m.colour
                     elif m.style == "band":
                         bands.append(m)
+                    elif m.style == "pin":
+                        if _pin_span(m) is not None:
+                            pins.append((area_id, m))
                     elif m.style == "dim_rest":
                         lit = (lit or set()) | {m.key}
                 if hold:
@@ -2798,11 +2921,16 @@ else:
                         extents.append(tuple(e))
             self.spine.fills = fills
             self.spine.bands = bands
+            self.spine.pins = pins
+            if self.spine._hover_pin not in pins:
+                self.spine._hover_pin = None
             self.spine.lit = lit
-            # band rows come from the overlays only: a preview never grows it
+            # band rows and the pin lane come from the overlays only: a
+            # preview never grows it
             rows = self.spine.band_rows_for(bands)
-            if rows != self.spine.band_rows:
+            if rows != self.spine.band_rows or bool(pins) != self.spine.pin_lane:
                 self.spine.band_rows = rows
+                self.spine.pin_lane = bool(pins)
                 if not hold:
                     self.spine.hold()             # the subject's extents, kept
             if hold:
@@ -2873,6 +3001,25 @@ else:
             self.follower.pin_keys([key])
             self._said_follow()
             self._move(seg.record_in, force=True)   # nothing read inside the click
+
+        def pin_clicked(self, area_id, mark):
+            """A pin clicked on the spine: the playhead to its first frame,
+            its key the subject until the playhead moves on (focus()), then
+            the area's on_pin(mark) -- all on the idle queue, nothing inside
+            the click. On a held tab (Effects) the playhead stays; the area
+            is still told."""
+            span = _pin_span(mark)
+            if span is None:
+                return
+            if self.tab not in HELD_CUT_TABS:
+                if mark.key in self.follower.cut.by_key:
+                    self.follower.reveal(mark.key, span[0])
+                else:
+                    self.follower.follow_playhead()
+                self._move(span[0])
+            fn = (_anchor()["areas"].get(area_id) or {}).get("on_pin")
+            if fn is not None:
+                later(lambda: self._call(area_id, "on_pin", mark))
 
         def scrub(self, frame, done=False):
             """The spine pressed and dragged: the positioner follows, on the

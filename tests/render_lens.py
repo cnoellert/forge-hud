@@ -452,6 +452,81 @@ fl.unregister_area("probe.bands")
 pump()
 check("no bands: the spine back to its height", sp.height() == h_before)
 
+
+# pins: Courier's notes at record frames, in a lane of their own over the bands
+def _px_at(x, y):
+    img = sp.grab().toImage()
+    fx, fy = img.width() / sp.width(), img.height() / sp.height()
+    return img.pixelColor(int(x * fx), int(y * fy)).name()
+
+
+g230 = win.follower.cut.by_key["GMM_230"]
+f_one = g400.record_in + 5
+was_subject, was_current = win.follower.ctx.primary.key, flame.timeline.current_segment
+PINS = [fl.Mark("GMM_400", "#E87E24", "pin", f_one),
+        fl.Mark("GMM_230", "#7fbf7f", "pin", (g230.record_in, g230.record_out)),
+        fl.Mark("GMM_400", "#E87E24", "pin", "not a frame")]
+clicked = []
+fl.register_area("probe.notes", "Notes", build=lambda p, c: QtWidgets.QLabel("n"),
+                 refresh=lambda w, c, m: None, overlay=lambda c: list(PINS),
+                 on_pin=clicked.append)
+pump()
+lane = sp.height() - h_before
+tick, bar = sp._pin_rect(PINS[0]), sp._pin_rect(PINS[1])
+check("pins: the lane grows the spine by PIN_HI, a gap and the split; a bad at is dropped",
+      sp.pin_lane and lane == sp.PIN_HI + sp.BAND_GAP + sp.SPLIT and len(sp.pins) == 2)
+check("a pin at a frame is a tick there, a range a bar over it, in their colours",
+      _px_at(tick.center().x(), tick.center().y()) == "#e87e24"
+      and _px_at(bar.center().x(), bar.center().y()) == "#7fbf7f"
+      and abs(tick.center().x() - (sp._x(f_one) + sp._x(f_one + 1)) / 2.0) < 0.01
+      and abs(bar.left() - sp._x(g230.record_in)) < 0.01)
+win.grab().save(os.path.join(out, "lens_pins.png"))
+hi = sp._pin_rect(PINS[0], True)
+above = (tick.center().x(), hi.top() + 1.5)
+subject_key = win.follower.ctx.primary.key
+s_rect = sp._rect(*[getattr(win.follower.cut.by_key[subject_key], f)
+                    for f in ("track", "record_in", "record_out")])
+stroke_before = _px_at(s_rect.center().x(), s_rect.top() + 0.6)
+before_hi = _px_at(*above)
+fl.preview("probe.notes", [PINS[0]], ("GMM_400 · a note", ["Not green enough"]))
+pump()
+check("a previewed pin draws taller and outlined, never growing the spine",
+      before_hi != "#e87e24" and _px_at(*above) == "#e87e24" and sp.height() - h_before == lane)
+check("a pin preview leaves the subject's outline as it was",
+      _px_at(s_rect.center().x(), s_rect.top() + 0.6) == stroke_before)
+win.grab().save(os.path.join(out, "lens_pins_preview.png"))
+fl.preview("probe.notes", None)
+pump()
+mouse(QtCore.QEvent.MouseMove, tick.center().x(), tick.center().y(), QtCore.Qt.NoButton)
+pump()
+check("a pin hovered on the spine is drawn as a preview's",
+      sp._hover_pin == ("probe.notes", PINS[0]) and _px_at(*above) == "#e87e24")
+press_release(tick.center().x(), tick.center().y(), tick.center().x(), tick.center().y())
+check("a pin clicked: the playhead to its frame, its shot the subject, its area told",
+      seq.current_time.frame == f_one and win.follower.ctx.primary.key == "GMM_400"
+      and clicked == [PINS[0]])
+press_release(bar.center().x(), bar.center().y(), bar.center().x(), bar.center().y())
+check("a range clicked: the playhead to its first frame, its area told",
+      seq.current_time.frame == g230.record_in and clicked[-1] == PINS[1])
+before = seq.current_time.frame
+c = mid(g400)
+press_release(tick.center().x(), tick.center().y(), c.x(), c.y())
+check("a pin press that wanders into the tracks does nothing",
+      seq.current_time.frame == before and len(clicked) == 2)
+fl.unregister_area("probe.notes")
+pump()
+check("no pins: the lane gone, the spine back to its height",
+      not sp.pin_lane and sp.height() == h_before)
+# a pin click is a spine use, as focus() is: a click in the timeline ends it,
+# leaving the timeline as the spine's own clicks above left it
+other = "GMM_400" if was_subject != "GMM_400" else "GMM_230"
+for current in (seq.seg(other), was_current):
+    flame.timeline.current_segment = current
+    fl._beat("Timeline")
+    pump()
+check("after the pins, a plain click in the timeline leads again",
+      win.follower.spine is False and win.follower.ctx.primary.key == was_subject)
+
 # a standing filter: an overlay's dim_rest lights its shots and dims the rest
 def _spine_px(key):
     s = win.follower.cut.by_key[key]

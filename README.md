@@ -298,6 +298,19 @@ one row per take for forge-takes' groups. The spine grows by the rows the
 areas' overlays use, up to four and then "+n"; a preview's bands never grow
 it.
 
+A `Mark(key, colour, "pin", at)` (forge_lens ≥ 0.8.0) sits at record frames
+instead of over a whole shot. `at` is a frame (an int) or a range
+`(first, last)`, both frames included like `Seg.record_in`/`record_out`. `key`
+is the shot the pin is on, so pins on a dimmed shot dim with it. Pins draw in
+their own lane above the bands: a small tick at a frame, a thin bar over a
+range. The lane is held while any overlay has pins. A preview's pins (the one
+selected or hovered) draw taller and outlined and never grow the spine, and a
+pin under the pointer draws the same way. Clicking a pin moves the playhead to
+its first frame, makes its shot the subject (as `focus()` does) and then calls
+the area's `register_area(..., on_pin=fn)` with that Mark on the idle queue.
+On Effects the playhead stays put, but the area is still told. An older
+forge_lens skips pins. For Courier's notes: one pin per frame.
+
 Tests: `pytest tests` (no Qt needed); the window itself, offscreen under
 Flame's Python: `PYTHONPATH=../forge-streams/src
 /opt/Autodesk/python/2027.1/bin/python3 tests/render_lens.py <out>
