@@ -98,7 +98,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -2228,9 +2228,15 @@ else:
         Nothing in Flame moves on the press, only on a drag or a release, on
         the idle queue."""
 
-        ROW, GAP, PAD = 11, 3, 6
+        #: A track row is drawn well taller than a band, and the bands kept
+        #: apart from the cut by SPLIT and a line: the cut read as another
+        #: take's band, the one that "always changes" (Chris, 2026-11-06:
+        #: *"I read it as another take honestly"*).
+        ROW, GAP, PAD = 16, 3, 6
         #: band rows over the tracks: height, gap, and how many before "+n"
         BAND, BAND_GAP, BANDS = 4, 2, 4
+        #: room between the last band row and the tracks, a line across it
+        SPLIT = 5
         #: How near the playhead's line a press grabs it, in pixels -- room
         #: for a pen (forge-takes' GRAB).
         GRAB = 5
@@ -2270,9 +2276,10 @@ else:
             self.update()
 
         def _top(self):
-            """The height the band rows take over the tracks."""
+            """The height the band rows take over the tracks, with the
+            split between them and the cut."""
             n = min(self.band_rows, self.BANDS)
-            return n * (self.BAND + self.BAND_GAP)
+            return n * (self.BAND + self.BAND_GAP) + (self.SPLIT if n else 0)
 
         def band_rows_for(self, marks):
             rows = [m.at for m in marks if m.style == "band" and isinstance(m.at, int)
@@ -2338,6 +2345,11 @@ else:
                                          width, self.ROW), QtGui.QColor("#1b1d24"))
             self._paint_bands(p, list(self.bands) + [m for m in self.marks
                                                      if m.style == "band"])
+            if top:
+                # the bands apart from the cut: a line across the split
+                y = self.PAD + top - (self.SPLIT + self.BAND_GAP) / 2.0
+                p.setPen(QtGui.QPen(QtGui.QColor("#3a3f4b"), 1))
+                p.drawLine(QtCore.QPointF(self.PAD, y), QtCore.QPointF(self.PAD + width, y))
             # a shot's marks merged: its fill colour, and how it is stroked
             fill_of, styles = {}, {}
             marks = [m for m in self.marks if m.style != "band"]

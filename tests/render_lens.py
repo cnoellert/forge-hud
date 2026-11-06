@@ -418,8 +418,8 @@ g400 = win.follower.cut.by_key["GMM_400"]
 bx = int(sp._x(g400.record_in) + 3)
 row0_y = sp.PAD + (sp.band_rows - 1 - 0) * (sp.BAND + sp.BAND_GAP) + 1
 px = img.pixelColor(int(bx * img.width() / sp.width()), int(row0_y * img.height() / sp.height()))
-check("band marks: 2 rows grow the spine by 12 px, row 0 in its take colour over GMM_400",
-      sp.band_rows == 2 and grown == 2 * (sp.BAND + sp.BAND_GAP)
+check("band marks: 2 rows grow the spine by 12 px and the split, row 0 in its take colour over GMM_400",
+      sp.band_rows == 2 and grown == 2 * (sp.BAND + sp.BAND_GAP) + sp.SPLIT
       and px.name() == fl._colour(COLOURS["warmer"]).name())
 win.grab().save(os.path.join(out, "lens_bands.png"))
 fl.preview("takes.takes", [fl.Mark("GMM_230", "#298587", "band", 3)], ("hover", []))
@@ -430,7 +430,7 @@ BANDS[:] = [fl.Mark("GMM_400", "#298587", "band", r) for r in range(6)]
 fl.update("probe.bands")
 pump()
 check("six rows: four drawn, +2 said", sp.band_rows == 6
-      and sp.height() - h_before == 4 * (sp.BAND + sp.BAND_GAP))
+      and sp.height() - h_before == 4 * (sp.BAND + sp.BAND_GAP) + sp.SPLIT)
 win.grab().save(os.path.join(out, "lens_bands_more.png"))
 fl.unregister_area("probe.bands")
 pump()
