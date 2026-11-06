@@ -98,7 +98,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.7.3"
+__version__ = "0.7.4"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -603,6 +603,19 @@ class Timeline(object):
         except Exception:
             return None
 
+    def picked(self, seq):
+        """``seq.selected_segments`` as (name, record in)s, sorted: the cheap
+        sign that the selection changed, None where it can't be read. A
+        shift-click leaves ``current_segment`` on the first one clicked, so
+        ``clicked`` alone never saw it [LIVE 2027.1, 2026-11-06: TST_030 and
+        then 050 and 080 shift-clicked, current_segment still TST_030;
+        selected_segments all three, in 0.03 ms]."""
+        try:
+            got = _v(seq.selected_segments)
+            return tuple(sorted((_s(seg.name), _frame(seg.record_in)) for seg in (got or ())))
+        except Exception:
+            return None
+
     def frame(self, seq):
         try:
             return _frame(seq.current_time)
@@ -746,6 +759,7 @@ class Follower(object):
         self.uid = None
         self.seq = None               # the live sequence last walked
         self._clicked = None
+        self._picked = None           # the selection's cheap sign (Timeline.picked)
         self.selection = []
         self.spine = False            # following the playhead by the spine's say
         self.pinned = None            # keys held, or None
@@ -881,20 +895,23 @@ class Follower(object):
         clicked = self.tl.clicked()
         first = uid != self.uid
         click = clicked != self._clicked and not first
+        # a shift-click changes the selection and not current_segment
+        picked = self.tl.picked(seq)
+        reselect = picked is not None and picked != self._picked and not first
         focus, track = self.tl.focused(seq, self.cut)
         stale = focus is None and track is not None and not (
             self._stale is not None and self._stale == track)
-        if first or click or self._walk_asked or stale:
+        if first or click or reselect or self._walk_asked or stale:
             self.cut = self.tl.walk(seq)
             self.selection = self.tl.selected(self.cut)
             self._walk_asked = False
             focus, track = self.tl.focused(seq, self.cut)
             self._stale = track if focus is None else None
-            if click:
+            if click or reselect:
                 self.spine = False    # a click in the timeline ends spine-follow
             if first:
                 self.pinned, self.spine, self.click = None, False, None
-        self.uid, self._clicked = uid, clicked
+        self.uid, self._clicked, self._picked = uid, clicked, picked
         self.focus_track = focus
         cut = self.cut
         frame = self.tl.frame(seq)

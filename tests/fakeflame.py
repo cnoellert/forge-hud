@@ -64,6 +64,10 @@ class Sequence(object):
         f = (self.start_time.frame + t.frame - 1) if t.relative else t.frame
         self._now = Time(f)
 
+    @property
+    def selected_segments(self):
+        return [s for s in self.segs if s.selected]
+
     def seg(self, key):
         m = _TRACKED.match(key)
         name = m.group(1) if m else key

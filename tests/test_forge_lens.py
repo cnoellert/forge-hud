@@ -250,6 +250,32 @@ def test_selection_beats_the_playhead_and_a_click_ends_spine_follow():
 
 
 @needs_linktest2
+def test_a_shift_click_is_followed_though_current_segment_stays():
+    """Flame leaves ``current_segment`` on the first segment clicked through
+    shift-clicks [LIVE 2027.1, 2026-11-06]: the selection's own sign says it."""
+    seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
+    f, flame = follower(seq)
+    f.tick("Timeline")
+    g230, g400, g450 = seq.seg("GMM_230"), seq.seg("GMM_400"), seq.seg("GMM_450")
+    g230.selected = True
+    flame.timeline.current_segment = g230
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert [s.key for s in ctx.segments] == ["GMM_230"]
+    g400.selected = True                                # shift-clicked
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert moved and ctx.source == "selection"
+    assert sorted(s.key for s in ctx.segments) == ["GMM_230", "GMM_400"]
+    g450.selected = True
+    ctx, moved, _s, _f = f.tick("Timeline")
+    assert sorted(s.key for s in ctx.segments) == ["GMM_230", "GMM_400", "GMM_450"]
+    walks = []
+    real_walk = f.tl.walk
+    f.tl.walk = lambda s: (walks.append(1), real_walk(s))[1]
+    f.tick("Timeline")
+    assert not walks                                    # nothing changed: no walk
+
+
+@needs_linktest2
 def test_on_effects_the_open_segment_leads_and_nothing_reads_the_timeline():
     seq = fakeflame.Sequence(fakeflame.linktest2()["cut"])
     f, flame = follower(seq)
