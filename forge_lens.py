@@ -98,7 +98,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -2620,11 +2620,13 @@ else:
             host = AreaHost(self, area_id, frame)
             self.hosts[area_id] = host
             frame.guard(None, None)
+            frame.broken = None                   # a failed build, kept until rebuilt
             try:
                 widget = area["build"](frame, self.follower.ctx)
                 if widget is not None:
                     frame.set_content(widget)
             except Exception as exc:
+                frame.broken = exc
                 _guard_line(area_id, "build", exc)
             frame.apply_fold()
             frame.setVisible(self.shows(area_id))
@@ -2714,6 +2716,12 @@ else:
             host = self.hosts.get(area_id)
             mode = host.mode if host is not None else "narrow"
             was, ctx.asked = ctx.asked, asked      # an update() inside a refresh nests
+            # what the last refresh said, never an old one: a line left from a
+            # failure 20 minutes before stood on every subject after it
+            # (Chris, TST_070, 2026-11-06 - forge-streams' Batch FX read). A
+            # failed build stands until the area is built again.
+            broken = getattr(frame, "broken", None)
+            frame.guard("build" if broken is not None else None, broken)
             try:
                 if frame.content is not None and frame.fold != "collapsed":
                     self._call(area_id, "refresh", frame.content, ctx, mode)

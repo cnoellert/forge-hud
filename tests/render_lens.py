@@ -230,6 +230,22 @@ check("a failed build is one guard line", win.frames["broken.one"]._guard.isVisi
       and "build failed (ZeroDivisionError)" in win.frames["broken.one"]._guard.text())
 fl.unregister_area("broken.one")
 
+# a refresh that failed once: its line goes with the next refresh that works
+FAIL = [True]
+def flaky_refresh(w, c, m):
+    if FAIL[0]:
+        raise RuntimeError("Clip does not have multiple versions to select.")
+fl.register_area("flaky.one", "Flaky", build=lambda p, c: QtWidgets.QLabel("f"),
+                 refresh=flaky_refresh)
+pump()
+line = win.frames["flaky.one"]._guard
+check("a failed refresh says so", line.isVisible() and "refresh failed (RuntimeError)" in line.text())
+FAIL[0] = False
+fl.update("flaky.one")
+pump()
+check("and the next refresh that works takes the line away", line.isHidden())
+fl.unregister_area("flaky.one")
+
 # re-register: the callbacks swap in the live window
 fl.register_area("streams.versions", "Versions", build=versions_build,
                  refresh=versions_refresh,
