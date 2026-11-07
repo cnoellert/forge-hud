@@ -570,3 +570,27 @@ def test_after_a_hold_flames_moves_are_not_the_artists():
     seq._now = fakeflame.Time(86460)
     ctx, moved, _s, _f = f.tick("Timeline")
     assert ctx.source == "playhead"
+
+
+def test_order_slot_follows_the_saved_order():
+    saved = ["c.notes", "a.takes", "b.depends"]
+    order = []
+    for a in ("a.takes", "b.depends", "c.notes", "d.new"):
+        order.insert(fl._order_slot(order, a, saved), a)
+    assert order == ["c.notes", "a.takes", "b.depends", "d.new"]
+    assert fl._order_slot(["x"], "y", None) == 1
+
+
+def test_order_moved_and_saved():
+    order = ["a", "b", "c", "d"]
+    assert fl._order_moved(order, "c", "a", ["a", "b", "c"]) == ["c", "a", "b", "d"]
+    # None: after this tab's last chip, not the end of every tab's
+    assert fl._order_moved(order, "a", None, ["a", "b", "c"]) == ["b", "c", "a", "d"]
+    assert fl._order_saved(["b", "a"], ["z", "a", "b"]) == ["b", "a", "z"]
+
+
+def test_register_takes_the_saved_order():
+    fl._save_state(order=["two", "one"])
+    for a in ("one", "two"):
+        fl.register_area(a, a, build=lambda p, c: None, refresh=lambda w, c, m: None)
+    assert fl._anchor()["order"] == ["two", "one"]

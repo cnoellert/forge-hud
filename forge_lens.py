@@ -100,7 +100,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.3"
+__version__ = "0.8.4"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -269,6 +269,38 @@ def _save_state(**changes):
             json.dump(st, fh)
     except Exception:
         pass                      # a Lens must never break an action
+
+
+def _order_slot(order, area_id, saved):
+    """Where *area_id*, registering, goes in *order*: before the first area
+    the artist's saved order puts after it; at the end when it was never
+    ordered (0.8.4)."""
+    saved = [a for a in (saved or ()) if isinstance(a, str)]
+    if area_id not in saved:
+        return len(order)
+    rank = saved.index(area_id)
+    for i, a in enumerate(order):
+        if a in saved and saved.index(a) > rank:
+            return i
+    return len(order)
+
+
+def _order_moved(order, area_id, before, shown):
+    """*order* with *area_id* moved before *before* -- or, None, after the
+    last of *shown* (the chips on this tab) -- as the chip was dropped."""
+    order = [a for a in order if a != area_id]
+    if before is not None and before in order:
+        order.insert(order.index(before), area_id)
+        return order
+    rest = [a for a in shown if a != area_id and a in order]
+    order.insert(order.index(rest[-1]) + 1 if rest else len(order), area_id)
+    return order
+
+
+def _order_saved(order, saved):
+    """The order to save: the one now, then any saved area not registered
+    this session -- a distro not loaded today keeps its word for tomorrow."""
+    return list(order) + [a for a in (saved or ()) if isinstance(a, str) and a not in order]
 
 
 class _Saved(dict):
@@ -983,7 +1015,9 @@ def register_area(area_id, title, build, refresh, tabs=DEFAULT_TABS, summary=Non
     rest hear of a frame only when it settles."""
     st = _anchor()
     if area_id not in st["order"]:
-        st["order"].append(area_id)
+        # in the order the artist dragged the chips to (0.8.4)
+        st["order"].insert(_order_slot(st["order"], area_id, _load_state().get("order")),
+                           area_id)
     st["areas"][area_id] = {
         "title": title, "build": build, "refresh": refresh,
         "tabs": tuple(tabs) if tabs else (), "summary": summary, "overlay": overlay,
@@ -1496,9 +1530,11 @@ HOST_SS = (
     "  border-radius: 8px; padding: 1px 8px; font-size: 10px; }"
     "QToolButton#chip[hidden_area=\"true\"] { color: %(faint)s; }"
     "QToolButton#chip:hover { border-color: #566078; }"
+    "QToolButton#chip[dragging=\"true\"] { border-color: %(ember)s; }"
+    "QWidget#chipmark { background: %(ember)s; }"
     "QToolButton#quiet { color: %(faint)s; border: none; font-size: 12px; padding: 0 2px; }"
     "QToolButton#quiet:hover { color: #c9d0dc; }"
-) % {"rule": RULE, "bad": BAD, "well": WELL, "faint": FAINT}
+) % {"rule": RULE, "bad": BAD, "well": WELL, "faint": FAINT, "ember": EMBER}
 
 
 def _drop(widget):
@@ -1771,6 +1807,57 @@ else:
         else:
             rect.setRight(max(start.left() + minimum.width() - 1, start.right() + delta.x()))
         return rect
+
+    class _Chip(QtWidgets.QToolButton):
+        """An area's chip: a click goes to it; dragged along the row, a line
+        shows where it will land and, on release, the area moves there in
+        the Lens and stays there (0.8.4). The chip itself never moves under
+        the pen -- a widget moved under it once left the Wacom driver
+        reading tip presses as right clicks (_Grip) -- and nothing is done
+        inside the release but asking later()."""
+
+        def __init__(self, win, area_id):
+            QtWidgets.QToolButton.__init__(self)
+            self._win, self.area_id = win, area_id
+            self._from = None
+            self.dragging = False
+
+        def _set_dragging(self, on):
+            self.dragging = on
+            self.setProperty("dragging", on)
+            self.style().unpolish(self)
+            self.style().polish(self)
+
+        def mousePressEvent(self, event):            # noqa: N802
+            if event.button() == QtCore.Qt.LeftButton:
+                self._from = event.position()
+            QtWidgets.QToolButton.mousePressEvent(self, event)
+
+        def mouseMoveEvent(self, event):             # noqa: N802
+            if self._from is not None and not self.dragging and (
+                    event.position() - self._from).manhattanLength() \
+                    > QtWidgets.QApplication.startDragDistance():
+                self.setDown(False)
+                self._set_dragging(True)
+            if self.dragging:
+                self._win.chip_dragged(self, self.mapTo(self._win, event.position().toPoint()))
+                event.accept()
+                return
+            QtWidgets.QToolButton.mouseMoveEvent(self, event)
+
+        def mouseReleaseEvent(self, event):          # noqa: N802
+            self._from = None
+            if not self.dragging:
+                QtWidgets.QToolButton.mouseReleaseEvent(self, event)
+                return
+            self.setDown(False)
+            self._set_dragging(False)
+            before = self._win.chip_dropped(self, self.mapTo(self._win, event.position().toPoint()))
+            if before is not False:
+                later(lambda a=self.area_id, b=before: self._win.reorder(a, b))
+            else:
+                later(self._win.chips)    # any rebuild put off while it was dragged
+            event.accept()                # a drag is no click: clicked never fires
 
     class _Grip(QtWidgets.QWidget):
         """A bottom corner the window is sized by: the drag moves an outline,
@@ -2708,6 +2795,14 @@ else:
             self._chips = QtWidgets.QHBoxLayout()
             self._chips.setSpacing(4)
             outer.addLayout(self._chips)
+            self._chip_list = []
+            # where a dragged chip will land: a line between chips, over the
+            # row and in no layout
+            self._chip_mark = QtWidgets.QWidget(self)
+            self._chip_mark.setObjectName("chipmark")
+            self._chip_mark.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+            self._chip_mark.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            self._chip_mark.hide()
             self.scroll = QtWidgets.QScrollArea()
             self.scroll.setWidgetResizable(True)
             self.scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
@@ -2817,7 +2912,12 @@ else:
             self.chips()
 
         def chips(self):
-            """A chip per area: jump to it, or bring a hidden one back."""
+            """A chip per area: jump to it, or bring a hidden one back; drag
+            it along the row to order the Lens."""
+            if any(c.dragging for c in self._chip_list):
+                return                    # rebuilt by reorder(), on the drop
+            self._chip_mark.hide()
+            self._chip_list = []
             while self._chips.count():
                 item = self._chips.takeAt(0)
                 if item.widget() is not None:
@@ -2826,15 +2926,71 @@ else:
             for area_id in _anchor()["order"]:
                 if area_id not in self.frames or not _on_tab(area_id, self.tab):
                     continue
-                chip = QtWidgets.QToolButton()
+                chip = _Chip(self, area_id)
                 chip.setObjectName("chip")
                 chip.setFocusPolicy(QtCore.Qt.NoFocus)
                 chip.setText(str((_anchor()["areas"].get(area_id) or {}).get("title", area_id)))
                 chip.setProperty("hidden_area", area_id in hidden)
-                chip.setToolTip("Bring it back" if area_id in hidden else "Go to it")
+                chip.setToolTip(("Bring it back" if area_id in hidden else "Go to it")
+                                + " - drag it along to order the Lens")
                 chip.clicked.connect(lambda _c=False, a=area_id: later(lambda: self.jump(a)))
                 self._chips.addWidget(chip)
+                self._chip_list.append(chip)
             self._chips.addStretch(1)
+
+        # -- the order --------------------------------------------------------------
+        # Chris, 2026-11-06: "can we implement reordering of the lens by
+        # dragging these [the chips] ... That order could then be
+        # remember[ed]. Right now the lens is constantly hopping still."
+        # Live, 0.8.3: at the top, Takes (29 px) and Depends (110) over
+        # Notes, 19 px to scroll -- no room to hold Notes when Depends
+        # changes height. Notes first, nothing above it moves it.
+
+        def _chip_slot(self, chip, at):
+            """(the chip it lands before or None at the end, the mark's x)."""
+            chips = self._chip_list
+            for c in chips:
+                g = c.geometry()
+                if at.x() < g.center().x():
+                    return c, g.left() - 3
+            return None, chips[-1].geometry().right() + 2
+
+        def chip_dragged(self, chip, at):
+            before, x = self._chip_slot(chip, at)
+            g = chip.geometry()
+            self._chip_mark.setGeometry(x, g.top(), 2, g.height())
+            self._chip_mark.show()
+            self._chip_mark.raise_()
+
+        def chip_dropped(self, chip, at):
+            """The area the dropped chip lands before (None: the end), or
+            False when it lands where it was."""
+            self._chip_mark.hide()
+            before, _x = self._chip_slot(chip, at)
+            chips = self._chip_list
+            i = chips.index(chip)
+            nxt = chips[i + 1] if i + 1 < len(chips) else None
+            if before is chip or before is nxt:
+                return False
+            return before.area_id if before is not None else None
+
+        def reorder(self, area_id, before):
+            """*area_id* moved before *before* (None: after this tab's last),
+            in the Lens and in the order saved for every session after."""
+            st = _anchor()
+            if area_id not in st["order"]:
+                return
+            shown = [c.area_id for c in self._chip_list]
+            st["order"][:] = _order_moved(st["order"], area_id, before, shown)
+            _save_state(order=_order_saved(st["order"], _load_state().get("order")))
+            frames = [self.frames[a] for a in st["order"] if a in self.frames]
+            for f in frames:
+                self._stack.removeWidget(f)
+            for i, f in enumerate(frames):
+                self._stack.insertWidget(1 + i, f)
+            self._place = None            # taken afresh from the new layout
+            self.chips()
+            self.paint_spine(hold=False)
 
         # -- the place held --------------------------------------------------------
         # Chris, 2026-11-06 (via forge-courier): "while moving the timeline

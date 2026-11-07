@@ -307,6 +307,15 @@ what's on screen. At the top of the Lens with the first area filling the
 view, the top stays the top. An area can still scroll the Lens itself
 through its host; that scroll becomes the new place to hold.
 
+The artist orders the areas by dragging their chips along the row under
+the caption (forge_lens ≥ 0.8.4). A line shows where the chip will land;
+on release the area moves there. The order is saved per user and comes
+back in every later session, whatever order the distros register in. An
+area registering for the first time goes after the ones already ordered.
+Holding a place can't help at the top of the Lens when there is little to
+scroll, so an area that must not move, such as forge-courier's Notes, is
+best dragged first.
+
 On the spine, a `Mark(key, colour, "band", row)` is a thin bar in the
 take's colour over that shot, in a row above the tracks (0 nearest them),
 one row per take for forge-takes' groups. The spine grows by the rows the

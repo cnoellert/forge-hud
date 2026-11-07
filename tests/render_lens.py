@@ -637,6 +637,101 @@ for _ in range(4):
     fl._beat("Timeline")
     pump()
 
+# the order: a chip dragged along the row moves its area, and the order stays
+def chip_mouse(chip, kind, x, buttons):
+    from PySide6 import QtGui
+    pos = QtCore.QPointF(x, chip.height() / 2)
+    glob = QtCore.QPointF(chip.mapToGlobal(pos.toPoint()))
+    QtWidgets.QApplication.sendEvent(chip, QtGui.QMouseEvent(
+        kind, pos, glob, QtCore.Qt.LeftButton, buttons, QtCore.Qt.NoModifier))
+
+
+def chip_of(area_id):
+    return [c for c in win._chip_list if c.area_id == area_id][0]
+
+
+def drag_chip(area_id, onto_x, held=None, via=None):
+    """Press the chip, move to *onto_x* (window x), release; *held* runs
+    while it is still down."""
+    chip = chip_of(area_id)
+    x0 = chip.width() // 2
+    chip_mouse(chip, QtCore.QEvent.MouseButtonPress, x0, QtCore.Qt.LeftButton)
+    x1 = onto_x - chip.mapTo(win, QtCore.QPoint(0, 0)).x()
+    mid = (x0 + x1) // 2 if via is None else via - chip.mapTo(win, QtCore.QPoint(0, 0)).x()
+    chip_mouse(chip, QtCore.QEvent.MouseMove, mid, QtCore.Qt.LeftButton)
+    chip_mouse(chip, QtCore.QEvent.MouseMove, x1, QtCore.Qt.LeftButton)
+    if held is not None:
+        held()
+    chip_mouse(chip, QtCore.QEvent.MouseButtonRelease, x1, QtCore.Qt.NoButton)
+    pump()
+
+
+def probes_order():
+    return [a for a in fl._anchor()["order"] if a.startswith("probe.o")]
+
+
+def stacked():
+    ids = [a for a in fl._anchor()["order"] if a in win.frames and not win.frames[a].isHidden()]
+    return sorted(ids, key=lambda a: win.frames[a].y())
+
+
+for oid in ("probe.o1", "probe.o2", "probe.o3"):
+    fl.register_area(oid, oid[-2:].upper(), build=lambda p, c: QtWidgets.QLabel("o"),
+                     refresh=lambda w, c, m: None)
+pump()
+fl._beat("Timeline")
+pump()
+jumped = []
+real_jump = win.jump
+win.jump = lambda a: jumped.append(a)
+seen = {}
+o1 = chip_of("probe.o1")
+o1_left = o1.mapTo(win, QtCore.QPoint(0, 0)).x()
+drag_chip("probe.o3", o1_left + 2, held=lambda: seen.update(
+    mark=win._chip_mark.isVisible(), x=win._chip_mark.x(), dragging=chip_of("probe.o3").dragging))
+check("a chip dragged: the line shows before the one it lands before, the chip lit",
+      seen.get("mark") and seen.get("dragging") and abs(seen["x"] - (o1_left - 3)) <= 1)
+check("dropped before O1: O3 first in the order, its frame above O1's, the chips too",
+      probes_order() == ["probe.o3", "probe.o1", "probe.o2"]
+      and [a for a in stacked() if a.startswith("probe.o")] == probes_order()
+      and [c.area_id for c in win._chip_list if c.area_id.startswith("probe.o")] == probes_order()
+      and not win._chip_mark.isVisible())
+check("a drag is no click: nothing jumped", jumped == [])
+saved = fl._load_state().get("order") or []
+check("the order saved", [a for a in saved if a.startswith("probe.o")] == probes_order())
+o2 = chip_of("probe.o2")
+o2_mid = o2.mapTo(win, QtCore.QPoint(o2.width() // 2 + 2, 0)).x()
+before = list(fl._anchor()["order"])
+drag_chip("probe.o2", o2_mid, via=o2_mid + 60)     # out along the row and back
+check("dragged out and back where it was: nothing moves, nothing jumped",
+      fl._anchor()["order"] == before and jumped == [])
+last = win._chip_list[-1]
+drag_chip("probe.o3", last.mapTo(win, QtCore.QPoint(last.width() + 20, 0)).x())
+check("dropped past the last chip: O3 last", fl._anchor()["order"][-1] == "probe.o3"
+      and probes_order() == ["probe.o1", "probe.o2", "probe.o3"])
+drag_chip("probe.o2", chip_of("probe.o1").mapTo(win, QtCore.QPoint(1, 0)).x())
+chip = chip_of("probe.o1")
+chip_mouse(chip, QtCore.QEvent.MouseButtonPress, 5, QtCore.Qt.LeftButton)
+chip_mouse(chip, QtCore.QEvent.MouseMove, 6, QtCore.Qt.LeftButton)
+chip_mouse(chip, QtCore.QEvent.MouseButtonRelease, 6, QtCore.Qt.NoButton)
+pump()
+check("a press that barely moves is a click: it goes to the area", jumped == ["probe.o1"])
+win.jump = real_jump
+for oid in ("probe.o1", "probe.o2", "probe.o3"):
+    fl.unregister_area(oid)
+pump()
+for oid in ("probe.o1", "probe.o3", "probe.o2"):     # another session, any order
+    fl.register_area(oid, oid[-2:].upper(), build=lambda p, c: QtWidgets.QLabel("o"),
+                     refresh=lambda w, c, m: None)
+pump()
+check("registered again in any order: the order dragged to comes back (O2 O1 O3)",
+      probes_order() == ["probe.o2", "probe.o1", "probe.o3"]
+      and [a for a in stacked() if a.startswith("probe.o")] == probes_order())
+for oid in ("probe.o1", "probe.o2", "probe.o3"):
+    fl.unregister_area(oid)
+fl._save_state(order=[])
+pump()
+
 # a standing filter: an overlay's dim_rest lights its shots and dims the rest
 def _spine_px(key):
     s = win.follower.cut.by_key[key]
