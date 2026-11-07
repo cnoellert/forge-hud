@@ -266,8 +266,14 @@ header.
 Two things save an area from reaching into the window:
 
 - **`ctx.asked`** says why this refresh: `subject`, `settled`, `refresh`,
-  `update`, `layout`, `fold` or `build`. An area that reads from disk only
-  on some of them redraws on the rest, and reads on a value it doesn't know.
+  `update`, `layout`, `fold`, `build`, `tab` or `frame`. An area that reads
+  from disk only on some of them redraws on the rest, and reads on a value
+  it doesn't know. `frame` (forge_lens ≥ 0.8.2) goes only to areas
+  registered with `frames=True`. They get it on every beat where the
+  playhead moved but the subject didn't change and nothing settled, at most
+  once a beat. Every other area hears about a new frame only once the
+  playhead settles. A scrub's jumps also set `ctx.playing`, the same as
+  playback does.
 - **`forge_lens.current_sequence()`** is the live `PySequence` the Lens last
   walked, or None. On Effects it's the one held from before the switch.
 - **`forge_lens.on_double(widget, fn)`** works on any pen: Qt's double-click, or

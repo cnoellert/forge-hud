@@ -571,6 +571,44 @@ fl.unregister_area("probe.below")
 fl.unregister_area("probe.grow")
 pump()
 
+# frames=True: an area that shows the frame hears of each one, asked "frame"
+heard, deaf = [], []
+fl.register_area("probe.frames", "Frames", build=lambda p, c: QtWidgets.QLabel("f"),
+                 refresh=lambda w, c, m: heard.append((c.asked, c.frame, c.playing)),
+                 frames=True)
+fl.register_area("probe.deaf", "Deaf", build=lambda p, c: QtWidgets.QLabel("d"),
+                 refresh=lambda w, c, m: deaf.append(c.asked))
+pump()
+f_was = seq._now
+mid_400 = (g400.record_in + g400.record_out) // 2
+seq._now = fakeflame.Time(mid_400)
+for _ in range(4):
+    fl._beat("Timeline")
+    pump()
+subject_was = win.follower.ctx.subject()
+del heard[:], deaf[:]
+seq._now = fakeflame.Time(mid_400 + 1)
+fl._beat("Timeline")
+pump()
+check("the frame moved, nothing else: a frames area refreshed, asked \"frame\"; no other",
+      win.follower.ctx.subject() == subject_was
+      and heard == [("frame", mid_400 + 1, False)] and deaf == [])
+seq._now = fakeflame.Time(mid_400 + 6)
+fl._beat("Timeline")
+pump()
+check("a scrub's jump inside the shot: heard too, ctx.playing set",
+      heard[-1] == ("frame", mid_400 + 6, True) and deaf == [])
+del heard[:]
+fl._beat("Timeline")
+pump()
+check("a still beat: not asked again", not any(a == "frame" for a, _f, _p in heard))
+fl.unregister_area("probe.frames")
+fl.unregister_area("probe.deaf")
+seq._now = f_was
+for _ in range(4):
+    fl._beat("Timeline")
+    pump()
+
 # a standing filter: an overlay's dim_rest lights its shots and dims the rest
 def _spine_px(key):
     s = win.follower.cut.by_key[key]

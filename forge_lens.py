@@ -45,7 +45,8 @@
 #       tools=(),                # header tools: [(label, menu_fn, tone_fn)]
 #       follows=(),              # area ids whose update() refreshes this one
 #       wide=False,              # may this area draw wide
-#       on_pin=None)             # (mark) -> None: one of its pins clicked
+#       on_pin=None,             # (mark) -> None: one of its pins clicked
+#       frames=False)            # refreshed, asked "frame", as the playhead moves
 #
 # tabs: an area shows and is refreshed on its own tabs only, and the window is
 # up on any area's. A tab outside CUT_TABS (Batch) has no spine, caption,
@@ -99,7 +100,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.1"
+__version__ = "0.8.2"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -225,10 +226,13 @@ class Ctx(object):
 #: Why an area is refreshed (ctx.asked): the subject moved (or the sequence);
 #: it settled; Refresh; update() of it or of an area it follows; the window
 #: went narrow/wide; its fold changed; it was just built (registered, or
-#: re-registered live); the window came to this area's tab. An area that reads
-#: only on some of these redraws on the rest -- and treats a value it doesn't
-#: know as a reason to read.
-ASKED = ("subject", "settled", "refresh", "update", "layout", "fold", "build", "tab")
+#: re-registered live); the window came to this area's tab; the playhead moved
+#: and nothing else did (0.8.2: only to an area registered frames=True, at
+#: most once a beat, during play and a scrub too -- ctx.playing says which, a
+#: scrub's jumps as well). An area that reads only on some of these redraws
+#: on the rest -- and treats a value it doesn't know as a reason to read.
+ASKED = ("subject", "settled", "refresh", "update", "layout", "fold", "build", "tab",
+         "frame")
 
 
 # --- process-global anchor (survives reloads) -------------------------------
@@ -968,12 +972,15 @@ class Follower(object):
 
 def register_area(area_id, title, build, refresh, tabs=DEFAULT_TABS, summary=None,
                   overlay=None, extent=None, effects=None, tools=(), follows=(),
-                  wide=False, on_pin=None):
+                  wide=False, on_pin=None, frames=False):
     """Add or replace an area. Safe at import time (no Qt is touched); a
     second call with the same id swaps the callbacks and rebuilds that
     area's widget in a live window -- its old class may belong to a purged
     module. *on_pin(mark)*: one of the area's overlay pins was clicked, on
-    the idle queue, after the playhead was sent to it."""
+    the idle queue, after the playhead was sent to it. *frames*: refresh it,
+    asked "frame", on every beat the playhead moved and nothing else did --
+    an area showing the frame itself (forge-courier's notes viewer). The
+    rest hear of a frame only when it settles."""
     st = _anchor()
     if area_id not in st["order"]:
         st["order"].append(area_id)
@@ -981,7 +988,8 @@ def register_area(area_id, title, build, refresh, tabs=DEFAULT_TABS, summary=Non
         "title": title, "build": build, "refresh": refresh,
         "tabs": tuple(tabs) if tabs else (), "summary": summary, "overlay": overlay,
         "extent": extent, "effects": effects, "tools": tuple(tools or ()),
-        "follows": tuple(follows or ()), "wide": bool(wide), "on_pin": on_pin}
+        "follows": tuple(follows or ()), "wide": bool(wide), "on_pin": on_pin,
+        "frames": bool(frames)}
     win = st.get("window")
     if win is not None:
         try:
@@ -3043,6 +3051,11 @@ else:
             elif frame_moved:
                 self.spine.frame = ctx.frame
                 self.spine.update()
+                # the frame alone: only the areas that show the frame itself
+                areas = _anchor()["areas"]
+                for a in [a for a in _anchor()["order"] if a in self.frames
+                          and (areas.get(a) or {}).get("frames")]:
+                    self.refresh_area(a, "frame")
 
         def refresh_all(self):
             self.follower.rewalk()
