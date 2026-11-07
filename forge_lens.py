@@ -100,7 +100,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.4"
+__version__ = "0.8.5"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -2186,6 +2186,14 @@ else:
         def __init__(self, win, area_id):
             QtWidgets.QFrame.__init__(self)
             self.setObjectName("area")
+            # at the height it asks for, never squeezed: the Lens scrolls
+            # instead. A scroll area resizes what it holds to no less than
+            # its minimum, so with every area free to shrink to its own,
+            # the stack was squeezed to fit and no scrollbar came [Chris,
+            # 2026-11-06: "launch with items collapsed it never initiates a
+            # scrollbar when those items are expanded"] -- live, Depends
+            # drawn 58 px of its 110, Takes squeezed the same way.
+            self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
             self.win, self.area_id = win, area_id
             self.content = None
             lay = QtWidgets.QVBoxLayout(self)

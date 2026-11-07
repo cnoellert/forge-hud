@@ -732,6 +732,36 @@ for oid in ("probe.o1", "probe.o2", "probe.o3"):
 fl._save_state(order=[])
 pump()
 
+# an area that can shrink is never squeezed to fit: the Lens scrolls instead
+class _Squashy(QtWidgets.QLabel):
+    def sizeHint(self):                              # noqa: N802
+        return QtCore.QSize(200, 1400)
+
+    def minimumSizeHint(self):                       # noqa: N802
+        return QtCore.QSize(20, 20)
+
+
+fl.register_area("probe.squash", "Squash", build=lambda p, c: _Squashy("s"),
+                 refresh=lambda w, c, m: None)
+sq = win.frames["probe.squash"]
+# alone, as live: a wrapping label in view sends QScrollArea down its
+# height-for-width path, which never squeezed -- the live Lens had none
+others = [f for a, f in win.frames.items() if a != "probe.squash"]
+for f in others:
+    f.setVisible(False)
+sq.set_fold("collapsed")
+pump()
+sq.set_fold("expanded")
+pump()
+bar = win.scroll.verticalScrollBar()
+check("an area expanded that could shrink: drawn at its height ({0}), the Lens scrolls ({1})"
+      .format(sq.content.height(), bar.maximum()),
+      sq.content.height() == 1400 and bar.maximum() > 0)
+fl.unregister_area("probe.squash")
+for a, f in win.frames.items():
+    f.setVisible(win.shows(a))
+pump()
+
 # a standing filter: an overlay's dim_rest lights its shots and dims the rest
 def _spine_px(key):
     s = win.follower.cut.by_key[key]

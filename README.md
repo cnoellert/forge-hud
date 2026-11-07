@@ -305,7 +305,9 @@ new subject, the scroll value moves to make up the difference, so the area
 being read doesn't shift. The held area is chosen again on every beat from
 what's on screen. At the top of the Lens with the first area filling the
 view, the top stays the top. An area can still scroll the Lens itself
-through its host; that scroll becomes the new place to hold.
+through its host; that scroll becomes the new place to hold. Each area is
+drawn at the height it asks for (its `sizeHint`) and is never squeezed to
+fit, so the Lens scrolls instead (forge_lens ≥ 0.8.5).
 
 The artist orders the areas by dragging their chips along the row under
 the caption (forge_lens ≥ 0.8.4). A line shows where the chip will land;
