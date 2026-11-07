@@ -292,6 +292,13 @@ Two things save an area from reaching into the window:
   otherwise moves a popup off a non-primary screen about 120 ms after it
   opens. Header tools get this already; use it for a menu of your own.
 
+When the Lens is scrolled, the area in view holds its place on screen
+(forge_lens ≥ 0.8.1). If an area above it changes height, for example Takes
+or Depends redrawn for a new subject, the scroll value moves to make up the
+difference, so nothing in view shifts. When the Lens isn't scrolled, the
+top stays the top. An area can still scroll the Lens itself through its
+host; that scroll becomes the new place to hold.
+
 On the spine, a `Mark(key, colour, "band", row)` is a thin bar in the
 take's colour over that shot, in a row above the tracks (0 nearest them),
 one row per take for forge-takes' groups. The spine grows by the rows the

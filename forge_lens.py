@@ -99,7 +99,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -2717,6 +2717,14 @@ else:
             self._stack.addStretch(1)
             self.scroll.setWidget(self._stack_w)
             outer.addWidget(self.scroll, 1)
+            # the place held: the area in view stays where it is on screen
+            # while the areas above it change height (hold_place)
+            self._place = None            # (area_id, its top less the scroll value)
+            self._place_h = 0             # the stack's height when it was taken
+            self._holding = False
+            bar = self.scroll.verticalScrollBar()
+            bar.valueChanged.connect(self._scrolled)
+            bar.rangeChanged.connect(lambda _lo, _hi: self.hold_place())
             self._grips = [_Grip(self, left=True), _Grip(self, left=False)]
             self._said_follow()
             self._apply_tab()
@@ -2819,6 +2827,62 @@ else:
                 chip.clicked.connect(lambda _c=False, a=area_id: later(lambda: self.jump(a)))
                 self._chips.addWidget(chip)
             self._chips.addStretch(1)
+
+        # -- the place held --------------------------------------------------------
+        # Chris, 2026-11-06 (via forge-courier): "while moving the timeline
+        # things aren't shuffling around in the lens ... static widgets don't
+        # move but are rendered in the same screenspace." A subject change
+        # redraws Takes and Depends at new heights; every area below them
+        # moved on screen though nothing in it had changed. As a browser's
+        # scroll anchoring: the area in view is held where it is, the scroll
+        # value moved by what changed above it. Only signals (rangeChanged,
+        # valueChanged) -- no timer, no event filter -- and the beat as a
+        # catch-all. Not scrolled, nothing moves: the top stays the top.
+
+        def _take_place(self):
+            """The place to hold: the first area whose top is in view, else
+            the one covering the viewport's top -- None at the top."""
+            v = self.scroll.verticalScrollBar().value()
+            self._place_h = self._stack_w.height()
+            self._place = None
+            if v <= 0:
+                return
+            for area_id in _anchor()["order"]:
+                f = self.frames.get(area_id)
+                if f is None or f.isHidden():
+                    continue
+                if f.y() >= v:
+                    self._place = (area_id, f.y() - v)
+                    return
+                if f.y() + f.height() > v:
+                    self._place = (area_id, f.y() - v)
+
+        def _scrolled(self, _value):
+            if self._holding:
+                return
+            if self._stack_w.height() != self._place_h:
+                self.hold_place()         # a clamp from a layout change, not a scroll
+            else:
+                self._take_place()        # the artist's scroll, or an area's own
+
+        def hold_place(self):
+            """The held area back at its place on screen, by the scroll value,
+            after a layout change -- never while the scrollbar is dragged.
+            Kept even when clamped, so it comes back as the cut grows again."""
+            bar = self.scroll.verticalScrollBar()
+            place = self._place
+            f = self.frames.get(place[0]) if place else None
+            if f is None or f.isHidden() or bar.isSliderDown():
+                self._take_place()
+                return
+            want = max(bar.minimum(), min(bar.maximum(), f.y() - place[1]))
+            if want != bar.value():
+                self._holding = True
+                try:
+                    bar.setValue(want)
+                finally:
+                    self._holding = False
+            self._place_h = self._stack_w.height()
 
         def jump(self, area_id):
             if area_id in self.hidden():
@@ -2952,6 +3016,9 @@ else:
         # -- the subject ----------------------------------------------------------
 
         def beat(self, tab, force=False, asked=None):
+            # the last beat's layout has settled: an area that grew as much
+            # as one above it shrank changed no range, so no signal said so
+            self.hold_place()
             tab = tab or self.tab
             if tab != self.tab:
                 self.set_tab(tab)
@@ -3157,6 +3224,7 @@ else:
                 self.remember()           # under the tab it is leaving
             self.close_popout()
             self.tab = tab
+            self._place = None            # another tab's areas: taken afresh
             self.mode = self._saved_mode()
             self._apply_tab()
             self._apply_mode()

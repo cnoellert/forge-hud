@@ -527,6 +527,50 @@ for current in (seq.seg(other), was_current):
 check("after the pins, a plain click in the timeline leads again",
       win.follower.spine is False and win.follower.ctx.primary.key == was_subject)
 
+
+# the place held: the area in view stays put while one above changes height
+GROW = [60]
+fl.register_area("probe.grow", "Grows", build=lambda p, c: QtWidgets.QLabel("g"),
+                 refresh=lambda w, c, m: w.setFixedHeight(GROW[0]))
+fl.register_area("probe.below", "Below", build=lambda p, c: QtWidgets.QLabel("b"),
+                 refresh=lambda w, c, m: w.setFixedHeight(900))
+pump()
+bar = win.scroll.verticalScrollBar()
+below = win.frames["probe.below"]
+bar.setValue(below.y() - 10)
+pump()
+screen_y = below.y() - bar.value()
+GROW[0] = 180
+fl.update("probe.grow")
+pump()
+check("an area above grows: the one in view stays where it was on screen",
+      bar.value() > 0 and below.y() - bar.value() == screen_y)
+GROW[0] = 20
+fl.update("probe.grow")
+pump()
+check("and shrinks: still where it was", below.y() - bar.value() == screen_y)
+GROW[0] = 60
+win.beat("Timeline", force=True)
+pump()
+check("a subject's refresh of every area: still where it was", below.y() - bar.value() == screen_y)
+bar.setValue(bar.value() + 40)
+pump()
+screen_y = below.y() - bar.value()
+GROW[0] = 140
+fl.update("probe.grow")
+pump()
+check("a scroll takes the place afresh, and that is held",
+      below.y() - bar.value() == screen_y)
+bar.setValue(0)
+pump()
+GROW[0] = 60
+fl.update("probe.grow")
+pump()
+check("at the top, the top stays the top", bar.value() == 0)
+fl.unregister_area("probe.below")
+fl.unregister_area("probe.grow")
+pump()
+
 # a standing filter: an overlay's dim_rest lights its shots and dims the rest
 def _spine_px(key):
     s = win.follower.cut.by_key[key]
