@@ -777,6 +777,25 @@ check("an area expanded that could shrink: drawn at its height ({0}), the Lens s
       .format(sq.content.height(), bar.maximum()),
       sq.content.height() == 1400 and bar.maximum() > 0)
 fl.unregister_area("probe.squash")
+# wrapped text: drawn at its height for the Lens's own width, never cut to
+# its hint at Qt's wider natural width (0.8.5 cut it: 75 px of 120 at 380)
+wrapped = {}
+
+
+def _wrapped_build(p, c):
+    lab = QtWidgets.QLabel(" ".join(["a note that wraps over several lines"] * 12))
+    lab.setWordWrap(True)
+    wrapped["label"] = lab
+    return lab
+
+
+fl.register_area("probe.wrap", "Wrap", build=_wrapped_build, refresh=lambda w, c, m: None)
+pump()
+lab = wrapped["label"]
+check("a wrapped label at the Lens's width: drawn whole ({0} px of {1}, {2} wide)"
+      .format(lab.height(), lab.heightForWidth(lab.width()), lab.width()),
+      lab.height() >= lab.heightForWidth(lab.width()) > lab.sizeHint().height())
+fl.unregister_area("probe.wrap")
 for a, f in win.frames.items():
     f.setVisible(win.shows(a))
 pump()

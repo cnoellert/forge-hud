@@ -100,7 +100,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.5"
+__version__ = "0.8.6"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -2207,7 +2207,14 @@ else:
             # 2026-11-06: "launch with items collapsed it never initiates a
             # scrollbar when those items are expanded"] -- live, Depends
             # drawn 58 px of its 110, Takes squeezed the same way.
-            self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+            # Minimum, not Fixed (0.8.5): Fixed also capped it at its hint,
+            # taken at Qt's natural width -- wider than the Lens -- so
+            # wrapped text, taller at the Lens's own width, was cut short
+            # (a word-wrapped label 75 px of its 120 at 380 wide;
+            # forge-courier's notes viewer 45 px, 2026-11-06). Minimum:
+            # never under its hint, free to grow to its height for the
+            # width it is given.
+            self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Minimum)
             self.win, self.area_id = win, area_id
             self.content = None
             lay = QtWidgets.QVBoxLayout(self)
