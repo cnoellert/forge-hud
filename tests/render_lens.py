@@ -17,7 +17,6 @@ import os
 import sys
 import types
 
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
@@ -25,6 +24,13 @@ sys.path.insert(0, HERE)
 out = sys.argv[1]
 graph_state = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else None
 os.makedirs(out, exist_ok=True)
+# a screen the size of Chris's (the offscreen default, 800x800, is narrower
+# than the wide Lens's minimum, so a wide place could never fit on it)
+with open(os.path.join(out, "screens.json"), "w") as fh:
+    json.dump({"screens": [{"name": "Offscreen2560", "x": 0, "y": 0, "width": 2560,
+                            "height": 1440, "logicalDpi": 96, "logicalBaseDpi": 96,
+                            "dpr": 1}]}, fh)
+os.environ["QT_QPA_PLATFORM"] = "offscreen:configfile=" + os.path.join(out, "screens.json")
 
 # forge_hud stands in: no heartbeat (beats are driven here), no pen log
 hud = types.ModuleType("forge_hud")
@@ -197,7 +203,7 @@ if graph_state is not None:
 seq._now = fakeflame.Time(86600)                   # GMM_230's first frames: V2's GMM_410
 seq.primary_track = seq.version.tracks[1]          # the focus on V2
 win = fl.open(fl.Timeline(flame))
-win.resize(400, 1200)
+win.setGeometry(2160, 0, 400, 1200)               # wider than the default, still on the screen
 pump()
 ctx = win.follower.ctx
 check("subject: GMM_410 · V2 at the playhead, over Gap on track 3",
@@ -317,6 +323,19 @@ host = fl.host("probe.batch")
 check("the host's surface: a real parent, its width, its metrics, whether it shows",
       host.window() is win and host.width() == win.frames["probe.batch"].width()
       and host.fontMetrics().height() > 0 and host.isVisible())
+win.set_mode("narrow")
+# a wide place saved half off the screen comes back whole on it
+from PySide6 import QtGui  # noqa: E402
+scr = QtGui.QGuiApplication.primaryScreen().availableGeometry()
+fl._save_state(**{"Batch.wide": [scr.right() - 300, scr.bottom() - 200, 1000, 900]})
+win.set_mode("wide")
+pump()
+g = win.geometry()
+check("going wide from a place saved half off the screen: on it whole, the "
+      "top-right corner and both grips ({0},{1} {2}x{3} in {4}x{5})".format(
+          g.x(), g.y(), g.width(), g.height(), scr.width(), scr.height()),
+      scr.contains(g.topRight()) and scr.contains(g.bottomLeft())
+      and scr.contains(g.bottomRight()) and g.width() == 1000)
 win.set_mode("narrow")
 fl._beat("Timeline")
 fl.unregister_area("probe.batch")

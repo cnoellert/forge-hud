@@ -309,6 +309,11 @@ through its host; that scroll becomes the new place to hold. Each area is
 drawn at the height it asks for (its `sizeHint`) and is never squeezed to
 fit, so the Lens scrolls instead (forge_lens ≥ 0.8.5).
 
+A saved window place, narrow or wide, comes back whole on the screen it is
+mostly on (forge_lens ≥ 0.8.5). It is shrunk to fit that screen and moved
+onto it; if the screen is too small even for the minimum size, the top-right
+corner stays on it.
+
 The artist orders the areas by dragging their chips along the row under
 the caption (forge_lens ≥ 0.8.4). A line shows where the chip will land;
 on release the area moves there. The order is saved per user and comes

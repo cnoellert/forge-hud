@@ -594,3 +594,17 @@ def test_register_takes_the_saved_order():
     for a in ("one", "two"):
         fl.register_area(a, a, build=lambda p, c: None, refresh=lambda w, c, m: None)
     assert fl._anchor()["order"] == ["two", "one"]
+
+
+def test_kept_on_fits_a_window_onto_its_screen():
+    laptop = (-2056, 38, 2056, 1291)
+    # the live case: off the left and past the bottom, grips off screen
+    assert fl._kept_on((-2465, 838, 900, 1214), laptop, (900, 360)) == (-2056, 115, 900, 1214)
+    # already on: untouched
+    assert fl._kept_on((100, 100, 900, 600), (0, 0, 2560, 1440)) == (100, 100, 900, 600)
+    # off the right and top: moved on
+    assert fl._kept_on((2000, -50, 900, 600), (0, 0, 2560, 1440)) == (1660, 0, 900, 600)
+    # too tall: shrunk to the screen
+    assert fl._kept_on((0, 0, 900, 1440), laptop, (900, 360)) == (-900, 38, 900, 1291)
+    # wider than the screen even at its minimum: the top-right corner kept on
+    assert fl._kept_on((0, 0, 1200, 500), (0, 0, 800, 600), (1000, 360)) == (-200, 0, 1000, 500)

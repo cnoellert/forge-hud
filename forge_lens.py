@@ -271,6 +271,20 @@ def _save_state(**changes):
         pass                      # a Lens must never break an action
 
 
+def _kept_on(rect, avail, minimum=(0, 0)):
+    """*rect* (x, y, w, h) fitted into *avail*: shrunk to it, no smaller than
+    *minimum*, and moved onto it -- where it still can't fit, its top-right
+    corner kept on, the header's buttons there [Chris, 2026-11-06: "When
+    going wide we should never go off screen with the upper right corner"]."""
+    x, y, w, h = rect
+    ax, ay, aw, ah = avail
+    w = max(min(w, aw), minimum[0])
+    h = max(min(h, ah), minimum[1])
+    x = min(max(x, ax), ax + aw - w)
+    y = max(min(y, ay + ah - h), ay)
+    return (x, y, w, h)
+
+
 def _order_slot(order, area_id, saved):
     """Where *area_id*, registering, goes in *order*: before the first area
     the artist's saved order puts after it; at the end when it was never
@@ -3449,9 +3463,22 @@ else:
             saved = _load_state().get(self._place_key(self.mode))
             if isinstance(saved, list) and len(saved) == 4:
                 rect = QtCore.QRect(*[int(v) for v in saved])
-                if any(s.availableGeometry().intersects(rect)
-                       for s in QtGui.QGuiApplication.screens()):
-                    return rect
+                # onto the screen most of it is on, whole: a wide Lens saved
+                # touching one screen's corner came back 700 px past its
+                # bottom, both grips off it, nothing to pull it back by
+                # [LIVE 2026-11-06: wide at -2465,838 900x1214 against the
+                # laptop's -2056,38 2056x1291]
+                best, most = None, 0
+                for s in QtGui.QGuiApplication.screens():
+                    a = s.availableGeometry().intersected(rect)
+                    if a.width() * a.height() > most:
+                        best, most = s.availableGeometry(), a.width() * a.height()
+                if best is not None:
+                    m = self.minimumSize()
+                    return QtCore.QRect(*_kept_on(
+                        (rect.x(), rect.y(), rect.width(), rect.height()),
+                        (best.x(), best.y(), best.width(), best.height()),
+                        (m.width(), m.height())))
             screen = (QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
                       or QtGui.QGuiApplication.primaryScreen())
             area = screen.availableGeometry()
