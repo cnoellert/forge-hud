@@ -532,6 +532,9 @@ check("after the pins, a plain click in the timeline leads again",
 GROW = [60]
 fl.register_area("probe.grow", "Grows", build=lambda p, c: QtWidgets.QLabel("g"),
                  refresh=lambda w, c, m: w.setFixedHeight(GROW[0]))
+MID = [80]
+fl.register_area("probe.mid", "Mid", build=lambda p, c: QtWidgets.QLabel("m"),
+                 refresh=lambda w, c, m: w.setFixedHeight(MID[0]))
 fl.register_area("probe.below", "Below", build=lambda p, c: QtWidgets.QLabel("b"),
                  refresh=lambda w, c, m: w.setFixedHeight(900))
 pump()
@@ -561,13 +564,38 @@ fl.update("probe.grow")
 pump()
 check("a scroll takes the place afresh, and that is held",
       below.y() - bar.value() == screen_y)
-bar.setValue(0)
+# live, 0.8.2: Depends' top the first in view, Notes under it filling most of
+# the view -- Depends changed height and Notes moved. The one most in view holds.
+mid = win.frames["probe.mid"]
+bar.setValue(mid.y() - 20)
 pump()
-GROW[0] = 60
+fl._beat("Timeline")                    # the place chosen again from the screen
+pump()
+screen_y = below.y() - bar.value()
+mid_top_in_view = 0 <= mid.y() - bar.value() < win.scroll.viewport().height()
+MID[0] = 200
+fl.update("probe.mid")
+pump()
+check("an area changes height just above the one most in view: that one stays put",
+      mid_top_in_view and win._place[0] == "probe.below"
+      and below.y() - bar.value() == screen_y)
+MID[0] = 80
+fl.update("probe.mid")
+pump()
+check("and back: still where it was", below.y() - bar.value() == screen_y)
+GROW[0] = win.scroll.viewport().height() + 100
 fl.update("probe.grow")
 pump()
-check("at the top, the top stays the top", bar.value() == 0)
+bar.setValue(0)
+pump()
+fl._beat("Timeline")
+pump()
+GROW[0] += 60
+fl.update("probe.grow")
+pump()
+check("at the top, the top area filling the view: the top stays the top", bar.value() == 0)
 fl.unregister_area("probe.below")
+fl.unregister_area("probe.mid")
 fl.unregister_area("probe.grow")
 pump()
 

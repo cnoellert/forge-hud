@@ -100,7 +100,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.2"
+__version__ = "0.8.3"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -2845,25 +2845,29 @@ else:
         # scroll anchoring: the area in view is held where it is, the scroll
         # value moved by what changed above it. Only signals (rangeChanged,
         # valueChanged) -- no timer, no event filter -- and the beat as a
-        # catch-all. Not scrolled, nothing moves: the top stays the top.
+        # catch-all.
+        # Which area: the one filling most of the viewport, the one being
+        # read -- not the first whose top is in view (0.8.1). Live, 0.8.2:
+        # scrolled to 715, Depends' top was the first in view and was held,
+        # 199 px of it over Notes' 620; Depends changes height with every
+        # subject, so Notes, under it, still moved [Chris, 2026-11-06: "The
+        # notes area is moving up and down still"]. Chosen again every beat
+        # from the settled layout, so it follows what is on screen.
 
         def _take_place(self):
-            """The place to hold: the first area whose top is in view, else
-            the one covering the viewport's top -- None at the top."""
+            """The place to hold: the area most in view, by its top's offset
+            from the viewport's (above it, negative). None with no area."""
             v = self.scroll.verticalScrollBar().value()
+            bottom = v + self.scroll.viewport().height()
             self._place_h = self._stack_w.height()
-            self._place = None
-            if v <= 0:
-                return
+            self._place, most = None, 0
             for area_id in _anchor()["order"]:
                 f = self.frames.get(area_id)
                 if f is None or f.isHidden():
                     continue
-                if f.y() >= v:
-                    self._place = (area_id, f.y() - v)
-                    return
-                if f.y() + f.height() > v:
-                    self._place = (area_id, f.y() - v)
+                shown = min(f.y() + f.height(), bottom) - max(f.y(), v)
+                if shown > most:
+                    self._place, most = (area_id, f.y() - v), shown
 
         def _scrolled(self, _value):
             if self._holding:
@@ -2876,13 +2880,14 @@ else:
         def hold_place(self):
             """The held area back at its place on screen, by the scroll value,
             after a layout change -- never while the scrollbar is dragged.
-            Kept even when clamped, so it comes back as the cut grows again."""
+            Kept even when clamped, so it comes back as the cut grows again.
+            True when the area is where it was held."""
             bar = self.scroll.verticalScrollBar()
             place = self._place
             f = self.frames.get(place[0]) if place else None
             if f is None or f.isHidden() or bar.isSliderDown():
                 self._take_place()
-                return
+                return True
             want = max(bar.minimum(), min(bar.maximum(), f.y() - place[1]))
             if want != bar.value():
                 self._holding = True
@@ -2891,6 +2896,7 @@ else:
                 finally:
                     self._holding = False
             self._place_h = self._stack_w.height()
+            return want == f.y() - place[1]
 
         def jump(self, area_id):
             if area_id in self.hidden():
@@ -3025,8 +3031,11 @@ else:
 
         def beat(self, tab, force=False, asked=None):
             # the last beat's layout has settled: an area that grew as much
-            # as one above it shrank changed no range, so no signal said so
-            self.hold_place()
+            # as one above it shrank changed no range, so no signal said so.
+            # Then the place taken again from what is on screen -- unless it
+            # was clamped, so it comes back as the cut grows again.
+            if self.hold_place():
+                self._take_place()
             tab = tab or self.tab
             if tab != self.tab:
                 self.set_tab(tab)
