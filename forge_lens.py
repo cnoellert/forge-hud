@@ -1672,6 +1672,23 @@ def _unwide(label):
     return label
 
 
+def _cut_states(text, room, metrics):
+    """*text*, a summary of states joined by " · ", on one line *room* wide:
+    whole states, never a word cut, with how many are held back --
+    ``5 · 2 out of date · +1`` [Chris, 2026-11-22: a line of fixed length
+    with an ellipsis, the whole of it on hover; forge-streams#5]."""
+    if metrics.horizontalAdvance(text) <= room:
+        return text
+    items = text.split(" \u00b7 ")
+    for kept in range(len(items) - 1, 0, -1):
+        shown = " \u00b7 ".join(items[:kept] + ["+%d" % (len(items) - kept)])
+        if metrics.horizontalAdvance(shown) <= room:
+            return shown
+    if len(items) == 1:
+        return metrics.elidedText(text, QtCore.Qt.ElideRight, room)
+    return "\u2026"                       # not one state and its count: all on hover
+
+
 def _elide(text, room, mono=False):
     font = QtGui.QFont("Menlo") if mono else QtGui.QFont()
     font.setPixelSize(11 if mono else 12)
@@ -1682,6 +1699,47 @@ def _elide(text, room, mono=False):
 if QtWidgets is None:
     _Window = None
 else:
+    class _Summary(QtWidgets.QLabel):
+        """An area's header summary. Wide, the whole of it, wrapped as it
+        always was. Narrow, one line cut to the room its row leaves
+        (_cut_states), the whole of it on hover -- never wider than the
+        Lens (forge-streams#5). Cut again whenever its width changes."""
+
+        def __init__(self, narrow):
+            QtWidgets.QLabel.__init__(self, "")
+            self.setTextFormat(QtCore.Qt.RichText)
+            _unwide(self)
+            self._narrow = narrow
+            self._html, self._tone = "", DIM
+
+        def set(self, html, tone):
+            self._html, self._tone = html or "", tone
+            self.fit()
+
+        def fit(self):
+            span = '<span style="color:{0}; font-size:11px;">{1}</span>'
+            whole = span.format(self._tone, self._html)
+            narrow = self._narrow()
+            self.setWordWrap(not narrow)
+            if narrow:
+                doc = QtGui.QTextDocument()
+                doc.setHtml(self._html)
+                plain = doc.toPlainText()
+                font = QtGui.QFont(self.font())
+                font.setPixelSize(11)
+                shown = _cut_states(plain, self.width(), QtGui.QFontMetrics(font))
+                if shown != plain:
+                    self.setText(span.format(self._tone, _escape(shown)))
+                    self.setToolTip(plain)
+                    return
+            self.setText(whole)
+            self.setToolTip("")
+
+        def resizeEvent(self, event):               # noqa: N802
+            QtWidgets.QLabel.resizeEvent(self, event)
+            if event.size().width() != event.oldSize().width():
+                self.fit()
+
     class _PenWatch(QtCore.QObject):
         """Each press, release and double-click the window is handed, with
         the tablet events behind them and focus coming and going, to
@@ -2233,12 +2291,6 @@ else:
             self._head = QtWidgets.QHBoxLayout()
             self._head.setSpacing(4)
             lay.addLayout(self._head)
-            # narrow, the summary's own line when it does not fit its row
-            # (place_summary), under the title, clear of the fold marks
-            self._sum_line = QtWidgets.QVBoxLayout()
-            self._sum_line.setContentsMargins(22, 0, 0, 0)
-            lay.addLayout(self._sum_line)
-            self._sum_gap = None          # what holds its place in the row
             self._sub = QtWidgets.QLabel("")
             self._sub.setTextFormat(QtCore.Qt.RichText)
             _unwide(self._sub)
@@ -2252,9 +2304,7 @@ else:
             lay.addLayout(self._body)
             self._marks = []
             self._title = _label("", "areatitle")
-            self._summary = QtWidgets.QLabel("")
-            self._summary.setTextFormat(QtCore.Qt.RichText)
-            _unwide(self._summary)
+            self._summary = _Summary(lambda: self.win.mode == "narrow")
             self.head()
 
         @property
@@ -2298,9 +2348,6 @@ else:
             on_release(self._title, lambda: later(self.cycle))
             self._head.addWidget(self._title)
             self._head.addSpacing(6)
-            self._sum_line.removeWidget(self._summary)
-            self._sum_gap = None
-            _unwide(self._summary)                  # the row's: what is left of it
             self._head.addWidget(self._summary, 1)
             for tool in self.area.get("tools") or ():
                 self._head.addWidget(self._tool(tool))
@@ -2310,48 +2357,7 @@ else:
             hide.setToolTip("Hide this area - its chip brings it back")
             hide.clicked.connect(lambda: later(lambda: self.win.set_hidden(self.area_id, True)))
             self._head.addWidget(hide)
-            self.place_summary()
-
-        def place_summary(self):
-            """The summary in its row when it fits there; narrow, its own
-            line under the title when it does not [Chris, 2026-11-22: "C
-            makes the most sense"]. Squeezed into what the row left, a long
-            one wrapped to a column a word wide (forge-streams#5)."""
-            doc = QtGui.QTextDocument()
-            doc.setDocumentMargin(0)
-            doc.setDefaultFont(self._summary.font())
-            doc.setHtml(self._summary.text())
-            need = doc.idealWidth()
-            for i in range(self._head.count()):
-                item = self._head.itemAt(i)
-                if item.widget() not in (self._summary, self._sum_gap):
-                    need += item.sizeHint().width() + self._head.spacing()
-            fits = self.win.mode != "narrow" or need <= self.width()
-            policy = self._summary.sizePolicy()
-            if fits and self._sum_gap is not None:
-                at = self._head.indexOf(self._sum_gap)
-                self._head.removeWidget(self._sum_gap)
-                _drop(self._sum_gap)
-                self._sum_gap = None
-                self._sum_line.removeWidget(self._summary)
-                policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Ignored)
-                self._summary.setSizePolicy(policy)
-                self._head.insertWidget(at, self._summary, 1)
-            elif not fits and self._sum_gap is None:
-                at = self._head.indexOf(self._summary)
-                self._head.removeWidget(self._summary)
-                self._sum_gap = QtWidgets.QWidget()   # the summary's place, held
-                self._head.insertWidget(at, self._sum_gap, 1)
-                # its own width on its own line: Ignored there lost the
-                # wrapped lines' height under it
-                policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Preferred)
-                self._summary.setSizePolicy(policy)
-                self._sum_line.addWidget(self._summary)
-
-        def resizeEvent(self, event):               # noqa: N802
-            QtWidgets.QFrame.resizeEvent(self, event)
-            if event.size().width() != event.oldSize().width():
-                self.place_summary()
+            self._summary.fit()                     # a mode switch heads afresh
 
         def _tool(self, tool):
             text, menu_fn = tool[0], tool[1]
@@ -2405,10 +2411,7 @@ else:
 
         def set_summary(self, said):
             said = said or {}
-            tone = TONE.get(said.get("tone"), DIM)
-            self._summary.setText('<span style="color:{0}; font-size:11px;">{1}</span>'
-                                  .format(tone, said.get("html", "")))
-            self.place_summary()
+            self._summary.set(said.get("html", ""), TONE.get(said.get("tone"), DIM))
 
         def set_subtitle(self, rest):
             self._sub.setText(rest or "")
