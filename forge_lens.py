@@ -100,7 +100,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = "0.8.6"
+__version__ = "0.8.7"
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".forge_lens.json")
 
@@ -1662,6 +1662,16 @@ def _label(text, name="dim", wrap=False):
     return lbl
 
 
+def _unwide(label):
+    """*label* wrapped, never widening what holds it: a long word is cut,
+    not a wider Lens (forge-streams#5)."""
+    label.setWordWrap(True)
+    policy = label.sizePolicy()                 # keeps the wrap's height for width
+    policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Ignored)
+    label.setSizePolicy(policy)
+    return label
+
+
 def _elide(text, room, mono=False):
     font = QtGui.QFont("Menlo") if mono else QtGui.QFont()
     font.setPixelSize(11 if mono else 12)
@@ -2225,6 +2235,7 @@ else:
             lay.addLayout(self._head)
             self._sub = QtWidgets.QLabel("")
             self._sub.setTextFormat(QtCore.Qt.RichText)
+            _unwide(self._sub)
             self._sub.setVisible(False)
             lay.addWidget(self._sub)
             self._guard = _label("", "guard", wrap=True)
@@ -2237,6 +2248,7 @@ else:
             self._title = _label("", "areatitle")
             self._summary = QtWidgets.QLabel("")
             self._summary.setTextFormat(QtCore.Qt.RichText)
+            _unwide(self._summary)
             self.head()
 
         @property
@@ -3459,6 +3471,15 @@ else:
                                       "Fold the Lens into a column")
             self.scroll.setHorizontalScrollBarPolicy(
                 QtCore.Qt.ScrollBarAlwaysOff if narrow else QtCore.Qt.ScrollBarAsNeeded)
+            # narrow, the column is the Lens's width whatever an area asks:
+            # with no scrollbar across, the widest area's minimum widened
+            # the stack and every area with it, cut off at the right
+            # [forge-streams#5, 2026-11-21: Depends at 609 gave Courier's
+            # Notes 609 of a 340 Lens]. One too wide is cut on its own.
+            # Wide still scrolls across to it.
+            self._stack_w.setSizePolicy(
+                QtWidgets.QSizePolicy.Ignored if narrow else QtWidgets.QSizePolicy.Preferred,
+                QtWidgets.QSizePolicy.Preferred)
             self.setMinimumSize(*((280, 300) if narrow else (900, 360)))
             self._switching = True
             try:
