@@ -38,7 +38,8 @@
 #       tabs=("Timeline",),
 #       build=build,             # (parent QWidget, ctx) -> QWidget
 #       refresh=refresh,         # (widget, ctx, mode) -> None; mode narrow|wide
-#       summary=summary,         # (ctx) -> {"html", "tone"}: the collapsed line
+#       summary=summary,         # (ctx) -> {"html", "tone", "brief"?}: the collapsed
+#                                #   line; narrow, "brief" (plain) when it does not fit
 #       overlay=None,            # (ctx) -> [Mark]: always on the spine
 #       extent=None,             # (ctx) -> (first, last, tracks) | None
 #       effects=None,            # (ctx) -> {shot_key: [Effect]}: cross-reading
@@ -1675,8 +1676,8 @@ def _unwide(label):
 def _cut_states(text, room, metrics):
     """*text*, a summary of states joined by " · ", on one line *room* wide:
     whole states, never a word cut, with how many are held back --
-    ``5 · 2 out of date · +1`` [Chris, 2026-11-22: a line of fixed length
-    with an ellipsis, the whole of it on hover; forge-streams#5]."""
+    ``5 · 2 out of date · +1``, else ``5 …`` [Chris, 2026-11-22: a line of
+    fixed length with an ellipsis, the whole of it on hover; forge-streams#5]."""
     if metrics.horizontalAdvance(text) <= room:
         return text
     items = text.split(" \u00b7 ")
@@ -1686,7 +1687,8 @@ def _cut_states(text, room, metrics):
             return shown
     if len(items) == 1:
         return metrics.elidedText(text, QtCore.Qt.ElideRight, room)
-    return "\u2026"                       # not one state and its count: all on hover
+    first = items[0] + " \u2026"             # not one state and its count: the first
+    return first if metrics.horizontalAdvance(first) <= room else "\u2026"
 
 
 def _elide(text, room, mono=False):
@@ -1703,17 +1705,19 @@ else:
         """An area's header summary. Wide, the whole of it, wrapped as it
         always was. Narrow, one line cut to the room its row leaves
         (_cut_states), the whole of it on hover -- never wider than the
-        Lens (forge-streams#5). Cut again whenever its width changes."""
+        Lens (forge-streams#5). An area may say it briefer for when the
+        whole does not fit ("brief", plain text), the whole still on hover. Cut again
+        whenever its width changes."""
 
         def __init__(self, narrow):
             QtWidgets.QLabel.__init__(self, "")
             self.setTextFormat(QtCore.Qt.RichText)
             _unwide(self)
             self._narrow = narrow
-            self._html, self._tone = "", DIM
+            self._html, self._tone, self._brief = "", DIM, None
 
-        def set(self, html, tone):
-            self._html, self._tone = html or "", tone
+        def set(self, html, tone, brief=None):
+            self._html, self._tone, self._brief = html or "", tone, brief
             self.fit()
 
         def fit(self):
@@ -1727,7 +1731,10 @@ else:
                 plain = doc.toPlainText()
                 font = QtGui.QFont(self.font())
                 font.setPixelSize(11)
-                shown = _cut_states(plain, self.width(), QtGui.QFontMetrics(font))
+                metrics = QtGui.QFontMetrics(font)
+                fits = metrics.horizontalAdvance(plain) <= self.width()
+                said = plain if fits or not self._brief else self._brief
+                shown = _cut_states(said, self.width(), metrics)
                 if shown != plain:
                     self.setText(span.format(self._tone, _escape(shown)))
                     self.setToolTip(plain)
@@ -2411,7 +2418,8 @@ else:
 
         def set_summary(self, said):
             said = said or {}
-            self._summary.set(said.get("html", ""), TONE.get(said.get("tone"), DIM))
+            self._summary.set(said.get("html", ""), TONE.get(said.get("tone"), DIM),
+                              said.get("brief"))
 
         def set_subtitle(self, rest):
             self._sub.setText(rest or "")
