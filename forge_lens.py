@@ -1735,6 +1735,9 @@ else:
                 fits = metrics.horizontalAdvance(plain) <= self.width()
                 said = plain if fits or not self._brief else self._brief
                 shown = _cut_states(said, self.width(), metrics)
+                if shown == said != plain and not shown.endswith("\u2026"):
+                    more = shown + " \u2026"           # brief is never all of it
+                    shown = more if metrics.horizontalAdvance(more) <= self.width() else shown
                 if shown != plain:
                     self.setText(span.format(self._tone, _escape(shown)))
                     self.setToolTip(plain)
